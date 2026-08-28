@@ -19,16 +19,20 @@ class PageComment:
     page: int
     text: str
     author: str
+    page_end: int | None = None
     priority: int = 0
     enabled: bool = True
 
     def state_value(self) -> dict[str, Any]:
-        return {
+        value = {
             "id": self.comment_id,
             "page": self.page,
             "text": self.text,
             "author": self.author,
         }
+        if self.page_end is not None and self.page_end != self.page:
+            value["page_end"] = self.page_end
+        return value
 
 
 class CommentStore:
@@ -65,15 +69,24 @@ class CommentStore:
         try:
             comment_id = str(record["id"]).strip()
             page = int(record["page"])
+            page_end = int(record.get("page_end", page))
             text = str(record["text"]).strip()
             author = str(record.get("author") or "匿名读者").strip()
             priority = int(record.get("priority", 0))
             enabled = bool(record.get("enabled", True))
         except (KeyError, TypeError, ValueError):
             return None
-        if not comment_id or page <= 0 or not text:
+        if not comment_id or page <= 0 or page_end < page or not text:
             return None
-        return PageComment(comment_id, page, text, author or "匿名读者", priority, enabled)
+        return PageComment(
+            comment_id,
+            page,
+            text,
+            author or "匿名读者",
+            page_end,
+            priority,
+            enabled,
+        )
 
     def list(self, book_id: str) -> list[PageComment]:
         comments = [self._parse(record) for record in self._read_records(book_id)]
@@ -83,21 +96,23 @@ class CommentStore:
         if not book_id or not pages:
             return None
         page_order = {int(page): index for index, page in enumerate(pages)}
-        candidates = [
-            comment
-            for comment in self.list(book_id)
-            if comment.enabled and comment.page in page_order
-        ]
+        candidates = []
+        for comment in self.list(book_id):
+            end = comment.page_end if comment.page_end is not None else comment.page
+            overlaps = [page for page in page_order if comment.page <= page <= end]
+            if comment.enabled and overlaps:
+                candidates.append((comment, min(page_order[page] for page in overlaps)))
         if not candidates:
             return None
-        candidates.sort(key=lambda item: (-item.priority, page_order[item.page], item.comment_id))
-        return candidates[0]
+        candidates.sort(key=lambda item: (-item[0].priority, item[1], item[0].comment_id))
+        return candidates[0][0]
 
     def upsert(
         self,
         book_id: str,
         *,
         page: int,
+        page_end: int | None = None,
         text: str,
         author: str = "匿名读者",
         priority: int = 0,
@@ -105,10 +120,11 @@ class CommentStore:
         comment_id: str | None = None,
     ) -> PageComment:
         page = int(page)
+        page_end = page if page_end is None else int(page_end)
         text = text.strip()
         author = author.strip() or "匿名读者"
-        if page <= 0:
-            raise ValueError("page must be greater than zero")
+        if page <= 0 or page_end < page:
+            raise ValueError("page range is invalid")
         if not text:
             raise ValueError("comment text is required")
 
@@ -120,6 +136,7 @@ class CommentStore:
         record = {
             "id": target_id,
             "page": page,
+            "page_end": page_end,
             "text": text,
             "author": author,
             "priority": int(priority),

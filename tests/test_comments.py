@@ -64,6 +64,22 @@ class CommentStoreTests(unittest.TestCase):
             )
             self.assertIsNone(store.select("terra-demo", (20, 21)))
 
+    def test_range_comment_matches_either_page_and_keeps_range_in_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = self.make_store(Path(directory))
+            comment = store.upsert(
+                "terra-demo",
+                page=66,
+                page_end=67,
+                text="跨页上下文批注",
+                author="Reader",
+                comment_id="web-comment-1",
+            )
+
+            self.assertEqual(store.select("terra-demo", (65, 66)), comment)
+            self.assertEqual(store.select("terra-demo", (67, 68)), comment)
+            self.assertEqual(comment.state_value()["page_end"], 67)
+
 
 if __name__ == "__main__":
     unittest.main()
