@@ -66,7 +66,7 @@ library-terra/
 
 - 域名：`https://nx.ybwlawa0.com/living-margins/`
 - 主机：腾讯云 Ubuntu，公网 IP `81.70.232.81`
-- Web 容器：`living-margins`，镜像阶段 `living-margins-cloud:0.5`
+- Web 容器：`living-margins`，镜像阶段 `living-margins-cloud:0.6`
 - OCR 容器：`living-margins-vision`，镜像阶段 `living-margins-vision:0.3`
 - 数据目录：服务器 `/home/ubuntu/living-margins/data` 挂载至容器 `/data`
 - Web 仅绑定主机 `127.0.0.1:18780`，由现有 HTTPS 反向代理暴露公网入口。

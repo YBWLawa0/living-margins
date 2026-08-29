@@ -1285,3 +1285,63 @@ textarea:disabled {
   .capture-actions { right: 16px; bottom: 62px; }
   .capture-result { bottom: 68px; }
 }
+
+/* V8.1 — editorial monochrome refinement */
+.app-view { padding-bottom: calc(52px + env(safe-area-inset-bottom)); background: var(--surface); }
+.mobile-app-header { min-height: 112px; align-items: center; padding-top: 24px; padding-bottom: 24px; background: var(--surface); }
+.mobile-app-header .kicker { margin-bottom: 6px; }
+.mobile-app-header h1 { font-size: 34px; }
+.app-page-content { padding-top: 0; background: var(--surface); }
+.data-hero { border-width: 0 1px 1px; }
+.data-hero > div { min-height: 124px; padding: 20px 24px; }
+.data-hero strong { font-size: 42px; }
+.reading-cta { min-height: 80px; margin-top: 0; border-right: 1px solid var(--black); border-bottom: 1px solid var(--black); border-left: 1px solid var(--black); padding: 18px 24px; }
+.reading-cta span { font-size: 20px; }
+.compact-section { margin-top: 0; border-top: 0; background: var(--surface); }
+.compact-section .section-header { min-height: 84px; border-top: 1px solid var(--black); }
+.compact-section .record-list { border-bottom: 1px solid var(--black); }
+.profile-card { border-top: 0; }
+.bottom-nav { height: calc(52px + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom); background: var(--surface); }
+.bottom-nav button { display: grid; place-items: center; border-right: 1px solid var(--black); color: var(--black); font-size: 13px; font-weight: 500; letter-spacing: .08em; }
+.bottom-nav button.active { background: var(--black); color: var(--white); }
+.bottom-nav .capture-nav { font-size: 13px; }
+
+.capture-stage { height: calc(100svh - 52px - env(safe-area-inset-bottom)); }
+.capture-topbar { min-height: 44px; grid-template-columns: 88px 1fr 88px; padding: max(6px, env(safe-area-inset-top)) 12px 6px; border-bottom: 1px solid rgba(255,255,255,.35); background: rgba(0,0,0,.58); }
+.capture-topbar strong { font-size: 12px; font-weight: 500; }
+.capture-text-button { padding-block: 4px; font-size: 11px; }
+.capture-result { left: 16px; bottom: 42px; gap: 12px; }
+.capture-result > strong { font-size: clamp(36px, 7vw, 64px); }
+.capture-result p { margin-top: 4px; font-size: 10px; }
+.capture-result .status-label { min-height: 20px; padding-inline: 7px; font-size: 9px; }
+.capture-actions { right: 12px; bottom: 36px; grid-template-columns: repeat(4, auto); gap: 5px; }
+.capture-action { min-height: 30px; border-color: rgba(255,255,255,.5); padding: 0 9px; background: rgba(0,0,0,.55); font-size: 10px; font-weight: 400; }
+.capture-statusbar { min-height: 28px; padding: 5px 12px; border-top: 1px solid rgba(255,255,255,.3); background: rgba(0,0,0,.62); font-size: 9px; }
+.capture-guide { inset: 9%; }
+.capture-guide i { width: 24px; height: 24px; }
+
+@media (max-width: 760px) {
+  .mobile-app-header { min-height: 96px; padding: 18px 20px; }
+  .mobile-app-header h1 { font-size: 30px; }
+  .mobile-app-header .kicker { font-size: 9px; }
+  .app-page-content { padding: 0 16px 80px; }
+  .data-hero > div { min-height: 96px; padding: 14px 16px; }
+  .data-hero span { font-size: 11px; }
+  .data-hero strong { font-size: 32px; }
+  .reading-cta { min-height: 68px; padding: 14px 16px; }
+  .reading-cta span { font-size: 17px; }
+  .compact-section .section-header { min-height: 72px; padding-inline: 12px; }
+  .compact-section .record-list { padding-inline: 12px; }
+  .profile-card { min-height: 116px; padding: 16px; }
+  .bottom-nav { height: calc(48px + env(safe-area-inset-bottom)); }
+  .bottom-nav button { font-size: 12px; }
+  .capture-stage { height: calc(100svh - 48px - env(safe-area-inset-bottom)); }
+}
+
+@media (orientation: landscape) and (max-height: 600px) {
+  .capture-view { padding-bottom: calc(44px + env(safe-area-inset-bottom)); }
+  .capture-stage { width: 100vw; height: calc(100svh - 44px - env(safe-area-inset-bottom)); }
+  .capture-bottom-nav { right: 0; bottom: 0; left: 0; width: 100%; height: calc(44px + env(safe-area-inset-bottom)); grid-template-columns: repeat(3, 1fr); grid-template-rows: 1fr; padding: 0 max(0px, calc((100vw - 760px) / 2)) env(safe-area-inset-bottom); border-top: 1px solid var(--black); border-left: 0; }
+  .capture-actions { right: 10px; bottom: 34px; }
+  .capture-result { bottom: 38px; }
+}
