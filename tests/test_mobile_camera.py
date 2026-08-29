@@ -20,9 +20,9 @@ class MobileCameraTests(unittest.TestCase):
         self.frames = root / "frames"
         self.path_patcher = patch.object(living_margins_web, "MOBILE_FRAME_ROOT", self.frames)
         self.path_patcher.start()
-        database = WebDatabase(root / "app.db")
+        self.database = WebDatabase(root / "app.db")
         self.server = ThreadingHTTPServer(
-            ("127.0.0.1", 0), living_margins_web.create_handler(database)
+            ("127.0.0.1", 0), living_margins_web.create_handler(self.database)
         )
         self.server.daemon_threads = True
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -99,6 +99,62 @@ class MobileCameraTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("JPEG", response["error"])
 
+    def test_two_users_have_separate_frame_and_state_channels(self) -> None:
+        status, first_user = self.request_json(
+            "/api/auth/register", {"username": "camera-one", "password": "secret12"}
+        )
+        self.assertEqual(status, 200)
+        status, first_started = self.request_json("/api/reading/start", {"device_id": None})
+        self.assertEqual(status, 201)
+        self.assertEqual(self.upload(b"\xff\xd8one\xff\xd9")[0], 202)
+
+        self.cookie = None
+        status, second_user = self.request_json(
+            "/api/auth/register", {"username": "camera-two", "password": "secret12"}
+        )
+        self.assertEqual(status, 200)
+        status, second_started = self.request_json("/api/reading/start", {"device_id": None})
+        self.assertEqual(status, 201)
+        self.assertEqual(self.upload(b"\xff\xd8two\xff\xd9")[0], 202)
+
+        first_session = int(first_started["reading_session"]["id"])
+        second_session = int(second_started["reading_session"]["id"])
+        self.assertNotEqual(first_session, second_session)
+        self.assertEqual(
+            {path.name for path in self.frames.glob("*.jpg")},
+            {
+                f"user-{first_user['user']['id']}-session-{first_session}.jpg",
+                f"user-{second_user['user']['id']}-session-{second_session}.jpg",
+            },
+        )
+
+        states = self.frames.parent / "states"
+        states.mkdir()
+        now = __import__("time").time()
+        for session_id, book_id in ((first_session, "book-one"), (second_session, "book-two")):
+            (states / f"session-{session_id}.json").write_text(
+                json.dumps(
+                    {
+                        "revision": session_id,
+                        "status": "stable",
+                        "book_id": book_id,
+                        "pages": [10, 11],
+                        "_relay_received_at": now,
+                    }
+                ),
+                encoding="utf-8",
+            )
+        with patch.object(living_margins_web, "VISION_SOURCE", "relay"), patch.object(
+            living_margins_web, "RELAY_STATE_ROOT", states
+        ):
+            first_state = living_margins_web.current_vision_state(
+                int(first_user["user"]["id"]), self.database
+            )
+            second_state = living_margins_web.current_vision_state(
+                int(second_user["user"]["id"]), self.database
+            )
+        self.assertEqual(first_state["book_id"], "book-one")
+        self.assertEqual(second_state["book_id"], "book-two")
 
 if __name__ == "__main__":
     unittest.main()

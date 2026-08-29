@@ -529,7 +529,9 @@ class WebDatabase:
                 "SELECT * FROM devices WHERE id = ?", (device["id"],)
             ).fetchone()
         assert updated is not None
-        return self._public_device(updated)
+        result = self._public_device(updated)
+        result["_paired_user_id"] = int(updated["paired_user_id"])
+        return result
     def submit_device_feedback(
         self,
         machine_code: str,

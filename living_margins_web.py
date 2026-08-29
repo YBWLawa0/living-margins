@@ -28,7 +28,7 @@ MOBILE_FRAME_ROOT = Path(
     os.environ.get("LM_MOBILE_FRAME_ROOT", str(RUNTIME_ROOT / "mobile_frames"))
 )
 COOKIE_NAME = "living_margins_session"
-WEB_API_VERSION = 10
+WEB_API_VERSION = 11
 WEB_CAPABILITIES = [
     "inspirations",
     "comment_review",
@@ -40,6 +40,7 @@ WEB_CAPABILITIES = [
     "device_presence",
     "firmware_ota",
     "mobile_camera_ingest",
+    "session_state_isolation",
 ]
 
 
@@ -105,6 +106,9 @@ RELAY_MAX_AGE_SECONDS = float(os.environ.get("LM_RELAY_MAX_AGE_SECONDS", "15"))
 RELAY_STATE_PATH = Path(
     os.environ.get("LM_RELAY_STATE_PATH", str(RUNTIME_ROOT / "relay_state.json"))
 )
+RELAY_STATE_ROOT = Path(
+    os.environ.get("LM_RELAY_STATE_ROOT", str(RELAY_STATE_PATH.parent / "relay_states"))
+)
 
 
 def _version_tuple(value: str) -> tuple[int, int, int]:
@@ -148,9 +152,13 @@ def read_firmware_release() -> dict[str, Any] | None:
     except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
         return None
 
-def read_relay_state() -> dict[str, Any] | None:
+def relay_state_path(session_id: int | None = None) -> Path:
+    return RELAY_STATE_PATH if session_id is None else RELAY_STATE_ROOT / f"session-{session_id}.json"
+
+
+def read_relay_state(session_id: int | None = None) -> dict[str, Any] | None:
     try:
-        payload = RELAY_STATE_PATH.read_bytes()
+        payload = relay_state_path(session_id).read_bytes()
         if len(payload) > 1_048_576:
             return None
         value = json.loads(payload.decode("utf-8"))
@@ -184,8 +192,17 @@ def write_relay_state(value: dict[str, Any]) -> dict[str, Any]:
     return value
 
 
-def current_vision_state() -> dict[str, Any] | None:
-    return read_relay_state() if VISION_SOURCE == "relay" else read_vision_state()
+def current_vision_state(
+    user_id: int | None = None, database: WebDatabase | None = None
+) -> dict[str, Any] | None:
+    if VISION_SOURCE != "relay":
+        return read_vision_state()
+    if user_id is None or database is None:
+        return read_relay_state()
+    session = database.current_reading_session(user_id)
+    if session is None:
+        return None
+    return read_relay_state(int(session["id"]))
 
 
 def create_handler(database: WebDatabase):
@@ -290,7 +307,7 @@ def create_handler(database: WebDatabase):
                 user = self._require_user()
                 if user is None:
                     return
-                vision = current_vision_state()
+                vision = current_vision_state(int(user["id"]), database)
                 database.sync_reading_context(int(user["id"]), vision)
                 review_queue = (
                     database.pending_comments_for_admin(int(user["id"]))
@@ -317,7 +334,7 @@ def create_handler(database: WebDatabase):
                 user = self._require_user()
                 if user is None:
                     return
-                vision = current_vision_state()
+                vision = current_vision_state(int(user["id"]), database)
                 database.sync_reading_context(int(user["id"]), vision)
                 self._send_json(HTTPStatus.OK, {"ok": True, "vision": vision})
                 return
@@ -352,10 +369,18 @@ def create_handler(database: WebDatabase):
                     self._send_error_json(HTTPStatus.BAD_REQUEST, "JPEG 图片无效")
                     return
                 MOBILE_FRAME_ROOT.mkdir(parents=True, exist_ok=True)
-                target = MOBILE_FRAME_ROOT / f"user-{int(user['id'])}.jpg"
+                target = MOBILE_FRAME_ROOT / (
+                    f"user-{int(user['id'])}-session-{int(session['id'])}.jpg"
+                )
                 temporary = target.with_suffix(".tmp")
                 temporary.write_bytes(payload)
                 temporary.replace(target)
+                for stale in MOBILE_FRAME_ROOT.glob(f"user-{int(user['id'])}-session-*.jpg"):
+                    if stale != target:
+                        try:
+                            stale.unlink()
+                        except OSError:
+                            pass
                 self._send_json(
                     HTTPStatus.ACCEPTED,
                     {"ok": True, "bytes": length, "uploaded_at": time.time()},
@@ -462,13 +487,14 @@ def create_handler(database: WebDatabase):
                     wait_ms = int(body.get("wait_ms", 0))
                     if wait_ms < 0 or wait_ms > 10_000:
                         raise ValueError("状态等待时间无效")
-                    database.touch_device(
+                    device = database.touch_device(
                         str(body.get("machine_code", "")),
                         str(body.get("device_token", "")),
                         "realtime" if wait_ms > 0 else "polling",
                     )
+                    owner_id = int(device["_paired_user_id"])
                     deadline = time.monotonic() + wait_ms / 1000
-                    vision = current_vision_state()
+                    vision = current_vision_state(owner_id, database)
                     while (
                         wait_ms > 0
                         and isinstance(vision, dict)
@@ -476,7 +502,7 @@ def create_handler(database: WebDatabase):
                         and time.monotonic() < deadline
                     ):
                         time.sleep(min(0.15, max(0.0, deadline - time.monotonic())))
-                        vision = current_vision_state()
+                        vision = current_vision_state(owner_id, database)
                     changed = (
                         isinstance(vision, dict) and vision.get("revision") != revision
                     )
@@ -554,7 +580,7 @@ def create_handler(database: WebDatabase):
                     self._send_json(HTTPStatus.OK, {"ok": True, "comment": comment})
                     return
                 if route == "/api/inspirations/mark":
-                    vision = current_vision_state()
+                    vision = current_vision_state(user_id, database)
                     inspiration, created = database.mark_inspiration(user_id, vision)
                     self._send_json(
                         HTTPStatus.CREATED if created else HTTPStatus.OK,
@@ -592,7 +618,9 @@ def create_handler(database: WebDatabase):
                     raw_device_id = body.get("device_id")
                     device_id = int(raw_device_id) if raw_device_id is not None else None
                     session = database.start_reading_session(
-                        user_id, device_id, read_vision_state()
+                        user_id, device_id, (
+                            read_vision_state() if VISION_SOURCE != "relay" else None
+                        )
                     )
                     self._send_json(HTTPStatus.CREATED, {"ok": True, "reading_session": session})
                     return
@@ -602,7 +630,7 @@ def create_handler(database: WebDatabase):
                     "/api/reading/end",
                 }:
                     if route == "/api/reading/pause":
-                        vision = current_vision_state()
+                        vision = current_vision_state(user_id, database)
                         if not vision or not vision.get("book_id") or not vision.get("pages"):
                             raise ValueError("识别服务尚未确认书籍和页码，暂时不能写批注")
                         database.sync_reading_context(user_id, vision)
