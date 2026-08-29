@@ -12,7 +12,10 @@ const state = {
   activeReview: null,
   annotationReturnView: "home",
   pollTimer: null,
+  devicePollTimer: null,
 };
+
+let pendingPairingToken = new URLSearchParams(window.location.search).get("pair");
 
 const $ = (selector) => document.querySelector(selector);
 const views = [
@@ -63,26 +66,65 @@ function setAuthMode(mode) {
   $("#auth-error").textContent = "";
 }
 
-function renderHome() {
-  $("#username").textContent = state.user?.username || "读者";
+function devicePresence(device) {
+  if (!device?.online) return { label: "离线", className: "offline" };
+  if (device.connection_mode === "realtime") {
+    return { label: "实时在线", className: "online" };
+  }
+  return { label: "轮询在线", className: "polling" };
+}
+
+function formatLastSeen(timestamp) {
+  if (!timestamp) return "尚未连接";
+  const seconds = Math.max(0, Math.round(Date.now() / 1000 - timestamp));
+  if (seconds < 5) return "刚刚连接";
+  if (seconds < 60) return `${seconds} 秒前连接`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} 分钟前连接`;
+  return new Date(timestamp * 1000).toLocaleString("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function renderDevices() {
   const list = $("#device-list");
   if (!state.devices.length) {
     list.innerHTML = `
       <div class="empty-device">
         <span class="record-index">—</span>
-        <span>还没有绑定屏幕。Demo 机器码：<strong>LM-DEMO-0001</strong></span>
+        <span>还没有绑定屏幕。请在屏幕右上角长按 LIVE 扫码绑定。</span>
       </div>`;
   } else {
-    list.innerHTML = state.devices.map((device, index) => `
-      <article class="device-card">
-        <span class="record-index">${String(index + 1).padStart(2, "0")}</span>
-        <div class="record-main">
-          <p>${escapeHtml(device.name)}</p>
-          <span>${escapeHtml(device.machine_code)}</span>
-        </div>
-        <span class="record-meta">已绑定</span>
-      </article>`).join("");
+    list.innerHTML = state.devices.map((device, index) => {
+      const presence = devicePresence(device);
+      return `
+        <article class="device-card">
+          <span class="record-index">${String(index + 1).padStart(2, "0")}</span>
+          <div class="record-main">
+            <p>${escapeHtml(device.name)}</p>
+            <span>${escapeHtml(device.machine_code)} · ${escapeHtml(formatLastSeen(device.last_seen_at))}</span>
+          </div>
+          <span class="device-presence ${presence.className}">${presence.label}</span>
+        </article>`;
+    }).join("");
   }
+
+  const readingDevice = $("#reading-device");
+  if (readingDevice) {
+    const session = state.readingSession;
+    const device =
+      state.devices.find((item) => item.id === session?.device_id) || state.devices[0];
+    const presence = devicePresence(device);
+    readingDevice.textContent = device ? `${device.name} · ${presence.label}` : "未绑定屏幕";
+  }
+}
+
+function renderHome() {
+  $("#username").textContent = state.user?.username || "读者";
+  renderDevices();
   $("#hero-copy").textContent = state.devices.length
     ? "屏幕已经就绪。开始阅读后，页码与批注会在书页旁自然出现。"
     : "先绑定一块页边屏幕，让批注在阅读时自然出现。";
@@ -249,7 +291,10 @@ function renderReading() {
       ? `识别状态 · ${vision.status || "unknown"}`
       : "识别服务 · OFFLINE";
   const device = state.devices.find((item) => item.id === session?.device_id) || state.devices[0];
-  $("#reading-device").textContent = device?.name || "未绑定屏幕";
+  const presence = devicePresence(device);
+  $("#reading-device").textContent = device
+    ? `${device.name} · ${presence.label}`
+    : "未绑定屏幕";
   $("#session-status").textContent = paused ? "已暂停" : "阅读中";
   $("#pause-reading").textContent = paused ? "继续跟随阅读" : "暂停并写批注";
   const canMarkInspiration = Boolean(
@@ -348,6 +393,24 @@ async function returnFromAnnotation() {
   showView($("#home-view"));
 }
 
+async function claimPendingPairing() {
+  if (!pendingPairingToken || !state.capabilities.includes("qr_pairing")) return;
+  try {
+    const body = await api("/api/devices/pair/claim", {
+      method: "POST",
+      body: JSON.stringify({ pairing_token: pendingPairingToken }),
+    });
+    if (!state.devices.some((device) => device.id === body.device.id)) {
+      state.devices.push(body.device);
+    }
+    pendingPairingToken = null;
+    window.history.replaceState({}, "", window.location.pathname);
+    toast("屏幕绑定成功");
+  } catch (error) {
+    window.history.replaceState({}, "", window.location.pathname);
+    toast(error.message);
+  }
+}
 async function bootstrap() {
   try {
     const body = await api("/api/bootstrap");
@@ -359,13 +422,33 @@ async function bootstrap() {
     state.reviewQueue = body.review_queue || [];
     state.readingSession = body.reading_session;
     state.vision = body.vision;
+    await claimPendingPairing();
     renderHome();
     showView($("#home-view"));
+    startDevicePolling();
   } catch (error) {
     showView($("#auth-view"));
   }
 }
 
+function startDevicePolling() {
+  stopDevicePolling();
+  if (!state.capabilities.includes("device_presence")) return;
+  const poll = async () => {
+    try {
+      const body = await api("/api/devices");
+      state.devices = body.devices || [];
+      renderDevices();
+    } catch (_) {}
+  };
+  poll();
+  state.devicePollTimer = window.setInterval(poll, 5000);
+}
+
+function stopDevicePolling() {
+  if (state.devicePollTimer) window.clearInterval(state.devicePollTimer);
+  state.devicePollTimer = null;
+}
 function startPolling() {
   stopPolling();
   const poll = async () => {
@@ -419,6 +502,7 @@ $("#logout-button").addEventListener("click", async () => {
   state.reviewQueue = [];
   state.readingSession = null;
   stopPolling();
+  stopDevicePolling();
   showView($("#auth-view"));
 });
 
