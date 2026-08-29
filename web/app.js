@@ -4,6 +4,7 @@ const state = {
   user: null,
   devices: [],
   comments: [],
+  feedback: [],
   inspirations: [],
   reviewQueue: [],
   readingSession: null,
@@ -25,8 +26,10 @@ const apiBase = window.location.pathname.startsWith("/living-margins/")
 
 const $ = (selector) => document.querySelector(selector);
 const views = [
+  $("#landing-view"),
   $("#auth-view"),
   $("#home-view"),
+  $("#profile-view"),
   $("#reading-view"),
   $("#annotation-view"),
   $("#review-view"),
@@ -40,6 +43,35 @@ const commentStatusLabels = {
 
 function showView(target) {
   views.forEach((view) => view.classList.toggle("hidden", view !== target));
+  window.scrollTo(0, 0);
+}
+
+function openAuth(mode = "login") {
+  setAuthMode(mode);
+  showView($("#auth-view"));
+}
+
+async function enterCaptureMode() {
+  renderReading();
+  showView($("#reading-view"));
+  startPolling();
+  $("#camera-panel").classList.toggle("hidden", !cameraSupported());
+  try {
+    if (document.documentElement.requestFullscreen && !document.fullscreenElement) {
+      await document.documentElement.requestFullscreen();
+    }
+    if (screen.orientation?.lock) await screen.orientation.lock("landscape");
+  } catch (_) {}
+  await startCamera();
+}
+
+function leaveCaptureMode(target) {
+  stopCamera();
+  stopPolling();
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  if (screen.orientation?.unlock) screen.orientation.unlock();
+  renderHome();
+  showView(target);
 }
 
 async function api(path, options = {}) {
@@ -174,12 +206,15 @@ function renderDevices() {
 }
 
 function renderHome() {
-  $("#username").textContent = state.user?.username || "读者";
+  const username = state.user?.username || "读者";
+  $("#username").textContent = username;
+  $("#home-username").textContent = username;
+  $("#profile-avatar").textContent = username.slice(0, 1).toUpperCase();
+  $("#data-comment-count").textContent = String(state.comments.length);
+  $("#data-inspiration-count").textContent = String(state.inspirations.length);
+  $("#data-device-count").textContent = String(state.devices.length);
   renderDevices();
-  $("#hero-copy").textContent = state.devices.length
-    ? "屏幕已经就绪。开始阅读后，页码与批注会在书页旁自然出现。"
-    : "先绑定一块页边屏幕，让批注在阅读时自然出现。";
-  $("#start-reading").textContent = state.readingSession ? "返回阅读" : "开始阅读";
+  $("#start-reading").querySelector("span").textContent = state.readingSession ? "继续本次阅读" : "开始一次阅读";
   renderComments();
   renderInspirations();
   renderReviewQueue();
@@ -210,6 +245,26 @@ function renderComments() {
         <span class="status-label status-${escapeHtml(comment.status)}">${escapeHtml(status)}</span>
       </button>`;
   }).join("");
+}
+
+function renderAgreedFeedback() {
+  const list = $("#agreed-list");
+  if (!list) return;
+  const items = state.feedback.filter((item) => item.action === "agree");
+  $("#agreed-count").textContent = `${items.length} 条记录`;
+  if (!items.length) {
+    list.innerHTML = `<div class="empty-device"><span class="record-index">—</span><span>还没有赞同过的批注。</span></div>`;
+    return;
+  }
+  list.innerHTML = items.map((item, index) => `
+    <article class="device-card">
+      <span class="record-index">${String(index + 1).padStart(2, "0")}</span>
+      <div class="record-main">
+        <p>${escapeHtml(item.book_id || "阅读批注")}</p>
+        <span>${item.page ? `P${item.page}` : "页码未知"} · ${escapeHtml(item.comment_id)}</span>
+      </div>
+      <span class="status-label status-approved">已赞同</span>
+    </article>`).join("");
 }
 
 function renderInspirations() {
@@ -435,11 +490,7 @@ async function returnFromAnnotation() {
   if (state.annotationReturnView === "reading" && state.readingSession?.status === "paused") {
     const response = await api("/api/reading/resume", { method: "POST", body: "{}" });
     state.readingSession = response.reading_session;
-    renderReading();
-    showView($("#reading-view"));
-    startPolling();
-    $("#camera-panel").classList.toggle("hidden", !cameraSupported());
-    await startCamera();
+    await enterCaptureMode();
     return;
   }
   renderHome();
@@ -471,6 +522,7 @@ async function bootstrap() {
     state.user = body.user;
     state.devices = body.devices || [];
     state.comments = body.comments || [];
+    state.feedback = body.feedback || [];
     state.inspirations = body.inspirations || [];
     state.reviewQueue = body.review_queue || [];
     state.readingSession = body.reading_session;
@@ -480,7 +532,7 @@ async function bootstrap() {
     showView($("#home-view"));
     startDevicePolling();
   } catch (error) {
-    showView($("#auth-view"));
+    showView($("#landing-view"));
   }
 }
 
@@ -510,6 +562,7 @@ function startPolling() {
       state.capabilities = body.capabilities || [];
       state.devices = body.devices || [];
       state.comments = body.comments || [];
+    state.feedback = body.feedback || [];
       state.inspirations = body.inspirations || [];
       state.reviewQueue = body.review_queue || [];
       state.readingSession = body.reading_session;
@@ -557,7 +610,7 @@ $("#logout-button").addEventListener("click", async () => {
   state.readingSession = null;
   stopPolling();
   stopDevicePolling();
-  showView($("#auth-view"));
+  showView($("#landing-view"));
 });
 
 $("#show-bind").addEventListener("click", () => $("#bind-sheet").classList.remove("hidden"));
@@ -597,11 +650,7 @@ $("#start-reading").addEventListener("click", async () => {
       });
       state.readingSession = body.reading_session;
     }
-    renderReading();
-    showView($("#reading-view"));
-    startPolling();
-    $("#camera-panel").classList.toggle("hidden", !cameraSupported());
-    await startCamera();
+    await enterCaptureMode();
   } catch (error) {
     toast(error.message);
   }
@@ -611,7 +660,7 @@ $("#comment-list").addEventListener("click", (event) => {
   const button = event.target.closest("[data-comment-id]");
   if (!button) return;
   const comment = state.comments.find((item) => item.id === Number(button.dataset.commentId));
-  if (comment) openAnnotation(comment, "home");
+  if (comment) openAnnotation(comment, "profile");
 });
 
 $("#inspiration-list").addEventListener("click", async (event) => {
@@ -650,12 +699,7 @@ $("#review-back").addEventListener("click", () => {
 $("#approve-comment").addEventListener("click", () => reviewActiveComment("approved"));
 $("#reject-comment").addEventListener("click", () => reviewActiveComment("rejected"));
 
-$("#back-home").addEventListener("click", () => {
-  stopCamera();
-  stopPolling();
-  renderHome();
-  showView($("#home-view"));
-});
+$("#back-home").addEventListener("click", () => leaveCaptureMode($("#home-view")));
 
 $("#pause-reading").addEventListener("click", async () => {
   const action = state.readingSession?.status === "paused" ? "resume" : "pause";
@@ -757,4 +801,30 @@ $("#camera-toggle").addEventListener("click", async () => {
   else await startCamera();
 });
 
+
+$("#landing-login").addEventListener("click", () => openAuth("login"));
+$("#landing-register").addEventListener("click", () => openAuth("register"));
+$("#landing-more").addEventListener("click", () => $("#landing-story").scrollIntoView({ behavior: "smooth" }));
+$("#auth-back").addEventListener("click", () => showView($("#landing-view")));
+
+document.querySelectorAll("[data-app-tab]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const tab = button.dataset.appTab;
+    if (tab === "camera") {
+      try {
+        if (!state.readingSession) {
+          const deviceId = state.devices[0]?.id ?? null;
+          const body = await api("/api/reading/start", {
+            method: "POST",
+            body: JSON.stringify({ device_id: deviceId }),
+          });
+          state.readingSession = body.reading_session;
+        }
+        await enterCaptureMode();
+      } catch (error) { toast(error.message); }
+      return;
+    }
+    leaveCaptureMode(tab === "profile" ? $("#profile-view") : $("#home-view"));
+  });
+});
 bootstrap();

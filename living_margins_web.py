@@ -28,7 +28,7 @@ MOBILE_FRAME_ROOT = Path(
     os.environ.get("LM_MOBILE_FRAME_ROOT", str(RUNTIME_ROOT / "mobile_frames"))
 )
 COOKIE_NAME = "living_margins_session"
-WEB_API_VERSION = 11
+WEB_API_VERSION = 12
 WEB_CAPABILITIES = [
     "inspirations",
     "comment_review",
@@ -41,6 +41,7 @@ WEB_CAPABILITIES = [
     "firmware_ota",
     "mobile_camera_ingest",
     "session_state_isolation",
+    "feedback_history",
 ]
 
 
@@ -324,6 +325,7 @@ def create_handler(database: WebDatabase):
                         "devices": database.devices_for_user(int(user["id"])),
                         "reading_session": database.current_reading_session(int(user["id"])),
                         "comments": database.comments_for_user(int(user["id"])),
+                        "feedback": database.feedback_for_user(int(user["id"])),
                         "inspirations": database.inspirations_for_user(int(user["id"])),
                         "review_queue": review_queue,
                         "vision": vision,

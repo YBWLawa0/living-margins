@@ -1,348 +1,130 @@
 <!doctype html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#FAFAFA" />
-    <meta
-      name="description"
-      content="众生行记 Living Margins，让实体书页遇见读过它的人。"
-    />
-    <title>众生行记 · Living Margins</title>
-    <link rel="stylesheet" href="styles.css" />
-  </head>
-  <body>
-    <main id="app" class="site-shell">
-      <section id="auth-view" class="view auth-view">
-        <header class="site-header">
-          <a class="wordmark" href="./" aria-label="众生行记首页">
-            <strong>众生行记</strong>
-            <span>LIVING MARGINS</span>
-          </a>
-          <span class="header-index">ENTRY / 01</span>
-        </header>
-
-        <div class="auth-layout">
-          <section class="auth-intro">
-            <p class="kicker">A READING COMPANION</p>
-            <h1>让每一页，<br />遇见读过它的人。</h1>
-            <p class="lead">
-              为实体书保留安静的数字页边。阅读时只看书，
-              来自其他读者的批注会在身旁自然出现。
-            </p>
-          </section>
-
-          <form id="auth-form" class="auth-panel">
-            <div class="tab-list" role="tablist" aria-label="账号操作">
-              <button type="button" class="active" data-auth-mode="login" role="tab">
-                登录
-              </button>
-              <button type="button" data-auth-mode="register" role="tab">
-                创建账号
-              </button>
-            </div>
-            <div class="field-group">
-              <label>
-                <span>用户名</span>
-                <input
-                  name="username"
-                  autocomplete="username"
-                  minlength="2"
-                  maxlength="24"
-                  required
-                />
-              </label>
-              <label>
-                <span>密码</span>
-                <input
-                  name="password"
-                  type="password"
-                  autocomplete="current-password"
-                  minlength="6"
-                  required
-                />
-              </label>
-            </div>
-            <p id="auth-error" class="form-error" aria-live="polite"></p>
-            <button id="auth-submit" class="button button-primary button-large" type="submit">
-              进入众生行记
-            </button>
-            <p class="form-note">登录状态会保留在这台设备上。</p>
-          </form>
-        </div>
-
-        <footer class="quiet-footer">
-          <span>PHYSICAL BOOKS / DIGITAL MARGINS</span>
-          <span>LOCAL DEMO · 2026</span>
-        </footer>
-      </section>
-
-      <section id="home-view" class="view home-view hidden">
-        <header class="site-header">
-          <a class="wordmark" href="./" aria-label="众生行记首页">
-            <strong>众生行记</strong>
-            <span>LIVING MARGINS</span>
-          </a>
-          <button id="logout-button" class="button-text">退出</button>
-        </header>
-
-        <div class="page-content">
-          <section class="page-intro">
-            <p class="kicker">PERSONAL MARGIN / 01</p>
-            <h1>晚上好，<br /><span id="username"></span>。</h1>
-            <p id="hero-copy" class="lead">
-              绑定一块页边屏幕，让批注在阅读时自然出现。
-            </p>
-            <button id="start-reading" class="button button-primary button-large">
-              开始阅读
-            </button>
-          </section>
-
-          <section class="rule-section">
-            <header class="section-header">
-              <div>
-                <p class="section-index">01</p>
-                <h2>页边屏幕</h2>
-              </div>
-              <button id="show-bind" class="button-link">绑定新屏幕</button>
-            </header>
-            <div id="device-list" class="record-list"></div>
-          </section>
-
-          <section class="rule-section">
-            <header class="section-header">
-              <div>
-                <p class="section-index">02</p>
-                <h2>我的批注</h2>
-              </div>
-              <span id="comment-count" class="status-label">0 条记录</span>
-            </header>
-            <div id="comment-list" class="record-list"></div>
-          </section>
-
-          <section id="review-section" class="rule-section hidden">
-            <header class="section-header">
-              <div>
-                <p class="section-index">03</p>
-                <h2>审核队列</h2>
-              </div>
-              <span id="review-count" class="status-label">0 条待审</span>
-            </header>
-            <div id="review-list" class="record-list"></div>
-          </section>
-
-          <section class="rule-section">
-            <header class="section-header">
-              <div>
-                <p class="section-index">04</p>
-                <h2>灵感夹</h2>
-              </div>
-              <span id="inspiration-count" class="status-label">0 条记录</span>
-            </header>
-            <div id="inspiration-list" class="record-list"></div>
-          </section>
-        </div>
-
-        <footer class="site-footer">
-          <span>众生行记</span>
-          <span>让每一页，遇见读过它的人。</span>
-        </footer>
-      </section>
-
-      <section id="review-view" class="view review-view hidden">
-        <header class="site-header">
-          <button id="review-back" class="button-text">返回审核队列</button>
-          <span class="header-index">REVIEW / 04</span>
-          <span class="status-label status-pending">待审核</span>
-        </header>
-
-        <div class="page-content review-content">
-          <section class="review-context">
-            <p class="kicker">READER SUBMISSION</p>
-            <h1 id="review-context-book">尚未识别书籍</h1>
-            <strong id="review-context-pages">—</strong>
-            <p id="review-context-author">提交者：—</p>
-          </section>
-
-          <section class="review-body">
-            <header class="annotation-form-header">
-              <div>
-                <p class="section-index">01</p>
-                <h2>批注内容</h2>
-              </div>
-            </header>
-            <blockquote id="review-comment-body"></blockquote>
-            <p id="review-error" class="form-error" aria-live="polite"></p>
-            <div class="review-actions">
-              <button id="reject-comment" class="button button-secondary button-large" type="button">
-                拒绝批注
-              </button>
-              <button id="approve-comment" class="button button-primary button-large" type="button">
-                批准并发布
-              </button>
-            </div>
-            <p class="annotation-note">
-              批准后，这条批注会进入对应书页的页边屏幕候选；拒绝后不会发布。
-            </p>
-          </section>
-        </div>
-
-        <footer class="site-footer">
-          <span>PENDING → APPROVED / REJECTED</span>
-          <span>本地 Demo 管理员审核。</span>
-        </footer>
-      </section>
-
-      <section id="reading-view" class="view reading-view hidden">
-        <header class="site-header">
-          <button id="back-home" class="button-text">返回首页</button>
-          <span class="header-index">READING / 02</span>
-          <span id="live-indicator" class="live-indicator">跟随中</span>
-        </header>
-
-        <div class="page-content reading-content">
-          <section class="reading-primary">
-            <div class="reading-meta">
-              <p id="vision-status" class="mono-label">等待识别程序</p>
-              <span id="session-status" class="status-label status-active">阅读中</span>
-            </div>
-            <p id="current-book" class="current-book">尚未识别书籍</p>
-            <strong id="current-pages" class="current-pages">—</strong>
-            <p id="current-state" class="current-state">请把书放入摄像头画面</p>
-          </section>
-          <section id="camera-panel" class="camera-panel hidden">
-            <div class="camera-preview">
-              <video id="camera-video" playsinline muted></video>
-              <canvas id="camera-canvas" hidden></canvas>
-              <p id="camera-placeholder">启动摄像头后，请让书页完整出现在画面中</p>
-            </div>
-            <div class="camera-controls">
-              <span id="camera-status" class="mono-label">摄像头尚未启动</span>
-              <button id="camera-toggle" type="button" class="button button-secondary">启动手机摄像头</button>
-            </div>
-          </section>
-
-          <section class="reading-details">
-            <div class="detail-row">
-              <span>页边屏幕</span>
-              <strong id="reading-device">未绑定</strong>
-            </div>
-            <div class="detail-row">
-              <span>识别方式</span>
-              <strong>持续跟随</strong>
-            </div>
-          </section>
-
-          <section class="reading-actions">
-            <button id="pause-reading" class="button button-secondary button-large">
-              暂停并写批注
-            </button>
-            <button id="mark-inspiration" class="button button-secondary button-large">
-              此处有灵感
-            </button>
-            <button id="end-reading" class="button button-ghost button-large">
-              结束本次阅读
-            </button>
-          </section>
-        </div>
-
-        <footer class="site-footer">
-          <span>SESSION ACTIVE</span>
-          <span>页面状态会自动更新，无需手动操作。</span>
-        </footer>
-      </section>
-
-      <section id="annotation-view" class="view annotation-view hidden">
-        <header class="site-header">
-          <button id="annotation-back" class="button-text">返回</button>
-          <span class="header-index">ANNOTATION / 03</span>
-          <span id="annotation-status" class="status-label">草稿</span>
-        </header>
-
-        <div class="page-content annotation-content">
-          <section class="annotation-context">
-            <p class="kicker">FROZEN CONTEXT</p>
-            <h1 id="annotation-context-book">尚未识别书籍</h1>
-            <strong id="annotation-context-pages">—</strong>
-            <p>批注将保留当前冻结的跨页上下文，不要求手动选择左右页。</p>
-          </section>
-
-          <form id="annotation-form" class="annotation-form">
-            <div class="annotation-form-header">
-              <div>
-                <p class="section-index">01</p>
-                <h2>写下此刻的想法</h2>
-              </div>
-              <span id="annotation-counter" class="mono-label">0 / 2000</span>
-            </div>
-            <label>
-              <span>批注内容</span>
-              <textarea
-                id="annotation-text"
-                name="body"
-                maxlength="2000"
-                placeholder="不必完整，先把这一刻留下来。"
-              ></textarea>
-            </label>
-            <p id="annotation-error" class="form-error" aria-live="polite"></p>
-            <div id="annotation-actions" class="annotation-actions">
-              <button id="save-draft" class="button button-secondary button-large" type="button">
-                保存草稿
-              </button>
-              <button id="submit-comment" class="button button-primary button-large" type="submit">
-                提交审核
-              </button>
-            </div>
-            <p id="annotation-note" class="annotation-note">
-              草稿只对你可见。提交后进入审核，审核通过才会出现在页边屏幕。
-            </p>
-          </form>
-        </div>
-
-        <footer class="site-footer">
-          <span>DRAFT → PENDING → APPROVED</span>
-          <span>当前阶段实现草稿与提交审核。</span>
-        </footer>
-      </section>
-    </main>
-
-    <div id="bind-sheet" class="dialog-backdrop hidden" role="dialog" aria-modal="true">
-      <section class="dialog-panel" aria-labelledby="bind-title">
-        <header class="dialog-header">
-          <span class="section-index">PAIR / 01</span>
-          <button id="cancel-bind" class="button-text" type="button">关闭</button>
-        </header>
-        <div class="dialog-content">
-          <h2 id="bind-title">绑定页边屏幕</h2>
-          <p>
-            输入屏幕上显示的机器码。绑定只需完成一次，
-            结束阅读不会解除绑定。
-          </p>
-          <form id="bind-form">
-            <label>
-              <span>机器码</span>
-              <input
-                name="machine_code"
-                placeholder="LM-DEMO-0001"
-                autocomplete="off"
-                required
-              />
-            </label>
-            <p id="bind-error" class="form-error" aria-live="polite"></p>
-            <div class="dialog-actions">
-              <button class="button button-primary button-large" type="submit">
-                确认绑定
-              </button>
-              <button class="button button-secondary button-large cancel-bind-secondary" type="button">
-                暂不绑定
-              </button>
-            </div>
-          </form>
-        </div>
-      </section>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#FAFAFA" />
+  <meta name="description" content="众生行记 Living Margins，让实体书页遇见读过它的人。" />
+  <title>众生行记 · Living Margins</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<main id="app" class="site-shell">
+  <section id="landing-view" class="view landing-view">
+    <header class="site-header landing-header">
+      <a class="wordmark" href="./"><strong>众生行记</strong><span>LIVING MARGINS</span></a>
+      <button id="landing-login" class="button-text" type="button">登录</button>
+    </header>
+    <div class="landing-hero">
+      <p class="kicker">PHYSICAL BOOKS / LIVING NOTES</p>
+      <h1>让每一页，<br />遇见读过它的人。</h1>
+      <p class="lead">专注读手中的书。页码由手机安静识别，来自其他读者的批注会在身旁自然出现。</p>
+      <div class="landing-actions">
+        <button id="landing-register" class="button button-primary button-large" type="button">开始使用</button>
+        <button id="landing-more" class="button button-secondary button-large" type="button">了解如何工作</button>
+      </div>
     </div>
+    <section id="landing-story" class="landing-story">
+      <article><span>01</span><h2>架起手机</h2><p>进入阅读后自动打开横屏取景，让整本书留在画面中。</p></article>
+      <article><span>02</span><h2>翻动纸页</h2><p>云端识别封面和页码，书名与进度同步到你的页边屏幕。</p></article>
+      <article><span>03</span><h2>留下页边</h2><p>记录灵感、发表批注，也回应曾在同一页停留的人。</p></article>
+    </section>
+  </section>
 
-    <div id="toast" class="toast hidden" aria-live="polite"></div>
-    <script src="app.js" defer></script>
-  </body>
+  <section id="auth-view" class="view auth-view hidden">
+    <header class="site-header">
+      <button id="auth-back" class="button-text" type="button">返回首页</button>
+      <span class="header-index">ACCOUNT</span>
+    </header>
+    <div class="auth-page">
+      <section class="auth-heading"><p class="kicker">YOUR READING MARGIN</p><h1>回到你的<br />阅读现场。</h1><p class="lead">登录后继续阅读、查看批注与灵感。</p></section>
+      <form id="auth-form" class="auth-panel">
+        <div class="tab-list" role="tablist" aria-label="账号操作">
+          <button type="button" class="active" data-auth-mode="login" role="tab">登录</button>
+          <button type="button" data-auth-mode="register" role="tab">创建账号</button>
+        </div>
+        <div class="field-group">
+          <label><span>用户名</span><input name="username" autocomplete="username" minlength="2" maxlength="24" required /></label>
+          <label><span>密码</span><input name="password" type="password" autocomplete="current-password" minlength="6" required /></label>
+        </div>
+        <p id="auth-error" class="form-error" aria-live="polite"></p>
+        <button id="auth-submit" class="button button-primary button-large" type="submit">进入众生行记</button>
+        <p class="form-note">登录状态会安全地保留在这台设备上。</p>
+      </form>
+    </div>
+  </section>
+
+  <section id="home-view" class="view app-view home-view hidden">
+    <header class="mobile-app-header"><div><p class="kicker">READING DATA</p><h1>阅读数据</h1></div><span id="home-username" class="header-index"></span></header>
+    <div class="page-content app-page-content">
+      <section class="data-hero">
+        <div><span>批注</span><strong id="data-comment-count">0</strong></div>
+        <div><span>灵感</span><strong id="data-inspiration-count">0</strong></div>
+        <div><span>设备</span><strong id="data-device-count">0</strong></div>
+      </section>
+      <button id="start-reading" class="reading-cta" type="button"><span>开始一次阅读</span><strong>打开横屏取景 →</strong></button>
+      <section class="rule-section compact-section"><header class="section-header"><div><p class="section-index">01</p><h2>页边屏幕</h2></div><button id="show-bind" class="button-link">绑定新屏幕</button></header><div id="device-list" class="record-list"></div></section>
+      <section class="rule-section compact-section"><header class="section-header"><div><p class="section-index">02</p><h2>最近活动</h2></div><span class="status-label">实时同步</span></header><div id="recent-activity" class="record-list"><div class="empty-device"><span class="record-index">—</span><span>开始阅读后，识别与记录会出现在这里。</span></div></div></section>
+    </div>
+    <nav class="bottom-nav" aria-label="主导航">
+      <button class="active" data-app-tab="data"><span>01</span><strong>阅读数据</strong></button>
+      <button class="capture-nav" data-app-tab="camera"><span>●</span><strong>拍摄</strong></button>
+      <button data-app-tab="profile"><span>03</span><strong>我的</strong></button>
+    </nav>
+  </section>
+
+  <section id="profile-view" class="view app-view profile-view hidden">
+    <header class="mobile-app-header profile-header"><div><p class="kicker">PERSONAL MARGIN</p><h1>我的</h1></div><button id="logout-button" class="button-text">退出登录</button></header>
+    <div class="page-content app-page-content">
+      <section class="profile-card"><span class="profile-avatar" id="profile-avatar">读</span><div><strong id="username"></strong><p>你的批注、回应与阅读灵感</p></div></section>
+      <section class="rule-section compact-section"><header class="section-header"><div><p class="section-index">01</p><h2>我的批注</h2></div><span id="comment-count" class="status-label">0 条记录</span></header><div id="comment-list" class="record-list"></div></section>
+      <section class="rule-section compact-section"><header class="section-header"><div><p class="section-index">02</p><h2>灵感集</h2></div><span id="inspiration-count" class="status-label">0 条记录</span></header><div id="inspiration-list" class="record-list"></div></section>
+      <section class="rule-section compact-section"><header class="section-header"><div><p class="section-index">03</p><h2>赞同的批注</h2></div><span id="agreed-count" class="status-label">0 条记录</span></header><div id="agreed-list" class="record-list"></div></section>
+      <section id="review-section" class="rule-section compact-section hidden"><header class="section-header"><div><p class="section-index">04</p><h2>审核队列</h2></div><span id="review-count" class="status-label">0 条待审</span></header><div id="review-list" class="record-list"></div></section>
+    </div>
+    <nav class="bottom-nav" aria-label="主导航">
+      <button data-app-tab="data"><span>01</span><strong>阅读数据</strong></button>
+      <button class="capture-nav" data-app-tab="camera"><span>●</span><strong>拍摄</strong></button>
+      <button class="active" data-app-tab="profile"><span>03</span><strong>我的</strong></button>
+    </nav>
+  </section>
+
+  <section id="reading-view" class="view reading-view capture-view hidden">
+    <div class="capture-stage">
+      <section id="camera-panel" class="camera-panel">
+        <div class="camera-preview"><video id="camera-video" playsinline muted></video><canvas id="camera-canvas" hidden></canvas><p id="camera-placeholder">横向架好手机，让封面或完整跨页进入画面</p><div class="capture-guide"><i></i><i></i><i></i><i></i></div></div>
+      </section>
+      <header class="capture-topbar"><button id="back-home" class="capture-text-button">退出取景</button><div><strong id="current-book">尚未识别书籍</strong><span id="vision-status">等待识别</span></div><span id="live-indicator" class="live-indicator">跟随中</span></header>
+      <section class="capture-result"><strong id="current-pages">—</strong><div><span id="session-status" class="status-label status-active">阅读中</span><p id="current-state">请把书放入摄像头画面</p></div></section>
+      <section class="capture-actions">
+        <button id="pause-reading" class="capture-action" type="button">暂停并写批注</button>
+        <button id="mark-inspiration" class="capture-action" type="button">此处有灵感</button>
+        <button id="camera-toggle" class="capture-action" type="button">启动手机摄像头</button>
+        <button id="end-reading" class="capture-action danger" type="button">结束阅读</button>
+      </section>
+      <footer class="capture-statusbar"><span id="camera-status">摄像头尚未启动</span><span id="reading-device">未绑定屏幕</span></footer>
+      <div class="rotate-device"><strong>请旋转手机</strong><span>横屏后获得完整取景空间</span></div>
+    </div>
+    <nav class="bottom-nav capture-bottom-nav" aria-label="主导航">
+      <button data-app-tab="data"><span>01</span><strong>阅读数据</strong></button>
+      <button class="capture-nav active" data-app-tab="camera"><span>●</span><strong>拍摄</strong></button>
+      <button data-app-tab="profile"><span>03</span><strong>我的</strong></button>
+    </nav>
+  </section>
+
+  <section id="annotation-view" class="view annotation-view hidden">
+    <header class="site-header"><button id="annotation-back" class="button-text">返回</button><span class="header-index">ANNOTATION</span><span id="annotation-status" class="status-label">草稿</span></header>
+    <div class="page-content annotation-content"><section class="annotation-context"><p class="kicker">FROZEN CONTEXT</p><h1 id="annotation-context-book">尚未识别书籍</h1><strong id="annotation-context-pages">—</strong><p>批注将保留当前冻结的跨页上下文。</p></section><form id="annotation-form" class="annotation-form"><div class="annotation-form-header"><div><p class="section-index">01</p><h2>写下此刻的想法</h2></div><span id="annotation-counter" class="mono-label">0 / 2000</span></div><label><span>批注内容</span><textarea id="annotation-text" name="body" maxlength="2000" placeholder="不必完整，先把这一刻留下来。"></textarea></label><p id="annotation-error" class="form-error"></p><div id="annotation-actions" class="annotation-actions"><button id="save-draft" class="button button-secondary button-large" type="button">保存草稿</button><button id="submit-comment" class="button button-primary button-large" type="submit">提交审核</button></div><p id="annotation-note" class="annotation-note"></p></form></div>
+  </section>
+
+  <section id="review-view" class="view review-view hidden">
+    <header class="site-header"><button id="review-back" class="button-text">返回审核队列</button><span class="header-index">REVIEW</span><span class="status-label status-pending">待审核</span></header>
+    <div class="page-content review-content"><section class="review-context"><p class="kicker">READER SUBMISSION</p><h1 id="review-context-book">尚未识别书籍</h1><strong id="review-context-pages">—</strong><p id="review-context-author">提交者：—</p></section><section class="review-body"><header class="annotation-form-header"><div><p class="section-index">01</p><h2>批注内容</h2></div></header><blockquote id="review-comment-body"></blockquote><p id="review-error" class="form-error"></p><div class="review-actions"><button id="reject-comment" class="button button-secondary button-large">拒绝批注</button><button id="approve-comment" class="button button-primary button-large">批准并发布</button></div></section></div>
+  </section>
+</main>
+
+<div id="bind-sheet" class="dialog-backdrop hidden" role="dialog" aria-modal="true"><section class="dialog-panel"><header class="dialog-header"><span class="section-index">PAIR</span><button id="cancel-bind" class="button-text">关闭</button></header><div class="dialog-content"><h2 id="bind-title">绑定页边屏幕</h2><p>输入屏幕上显示的机器码。绑定只需完成一次。</p><form id="bind-form"><label><span>机器码</span><input name="machine_code" placeholder="LM-DEMO-0001" autocomplete="off" required /></label><p id="bind-error" class="form-error"></p><div class="dialog-actions"><button class="button button-primary button-large">确认绑定</button><button class="button button-secondary button-large cancel-bind-secondary" type="button">暂不绑定</button></div></form></div></section></div>
+<div id="toast" class="toast hidden" aria-live="polite"></div>
+<script src="app.js" defer></script>
+</body>
 </html>

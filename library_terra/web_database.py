@@ -396,6 +396,18 @@ class WebDatabase:
             "updated_at": float(row["updated_at"]),
         }
 
+    def feedback_for_user(self, user_id: int) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM comment_feedback
+                WHERE user_id = ? AND action = 'agree'
+                ORDER BY updated_at DESC, id DESC
+                """,
+                (user_id,),
+            ).fetchall()
+        return [self._public_feedback(row) for row in rows]
+
     def start_device_pairing(
         self, machine_code: str, device_token: str, ttl_seconds: int = 300
     ) -> dict[str, Any]:
