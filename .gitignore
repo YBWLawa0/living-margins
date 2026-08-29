@@ -41,3 +41,8 @@ build/
 dist/
 *.egg-info/
 
+.pio/
+firmware/.pio/
+firmware/include/device_secrets.h
+
+.pio-core/
