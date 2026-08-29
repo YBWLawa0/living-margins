@@ -13,9 +13,15 @@ const state = {
   annotationReturnView: "home",
   pollTimer: null,
   devicePollTimer: null,
+  cameraStream: null,
+  cameraTimer: null,
+  cameraUploading: false,
 };
 
 let pendingPairingToken = new URLSearchParams(window.location.search).get("pair");
+const apiBase = window.location.pathname.startsWith("/living-margins/")
+  ? "/living-margins"
+  : "";
 
 const $ = (selector) => document.querySelector(selector);
 const views = [
@@ -37,7 +43,7 @@ function showView(target) {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
+  const response = await fetch(`${apiBase}${path}`, {
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
     ...options,
@@ -47,6 +53,51 @@ async function api(path, options = {}) {
   return body;
 }
 
+function cameraSupported() {
+  return state.capabilities.includes("mobile_camera_ingest") && Boolean(navigator.mediaDevices?.getUserMedia);
+}
+function setCameraStatus(message) { const element = $("#camera-status"); if (element) element.textContent = message; }
+function stopCamera() {
+  if (state.cameraTimer) window.clearInterval(state.cameraTimer);
+  state.cameraTimer = null;
+  state.cameraStream?.getTracks().forEach((track) => track.stop());
+  state.cameraStream = null; state.cameraUploading = false;
+  const video = $("#camera-video");
+  if (video) { video.srcObject = null; video.classList.remove("camera-active"); }
+  const toggle = $("#camera-toggle"); if (toggle) toggle.textContent = "启动手机摄像头";
+  setCameraStatus("摄像头尚未启动");
+}
+async function uploadCameraFrame() {
+  const video = $("#camera-video"); const canvas = $("#camera-canvas");
+  if (!state.cameraStream || state.cameraUploading || !state.readingSession || state.readingSession.status !== "active" || video.readyState < 2) return;
+  if (!video.videoWidth || !video.videoHeight) return;
+  const width = Math.min(video.videoWidth, 1280); const height = Math.round(video.videoHeight * width / video.videoWidth);
+  canvas.width = width; canvas.height = height;
+  canvas.getContext("2d", { alpha: false }).drawImage(video, 0, 0, width, height);
+  state.cameraUploading = true;
+  try {
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.72));
+    if (!blob) throw new Error("无法生成摄像头画面");
+    const response = await fetch(`${apiBase}/api/vision/frame`, { method: "POST", credentials: "same-origin", headers: { "Content-Type": "image/jpeg" }, body: blob });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || "画面上传失败");
+    setCameraStatus("画面已送达云端 · 持续识别中");
+  } catch (error) { setCameraStatus(error.message); }
+  finally { state.cameraUploading = false; }
+}
+async function startCamera() {
+  if (state.cameraStream) return;
+  if (!cameraSupported()) { setCameraStatus("当前浏览器不支持摄像头，或服务端尚未启用"); return; }
+  try {
+    setCameraStatus("正在请求摄像头权限…");
+    state.cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+    const video = $("#camera-video"); video.srcObject = state.cameraStream; await video.play(); video.classList.add("camera-active");
+    $("#camera-toggle").textContent = "关闭摄像头"; setCameraStatus("摄像头已启动 · 正在上传");
+    await uploadCameraFrame(); state.cameraTimer = window.setInterval(uploadCameraFrame, 1200);
+  } catch (error) {
+    stopCamera(); setCameraStatus(error.name === "NotAllowedError" ? "未获得摄像头权限，请在浏览器设置中允许" : `无法启动摄像头：${error.message}`);
+  }
+}
 function toast(message) {
   const element = $("#toast");
   element.textContent = message;
@@ -387,6 +438,8 @@ async function returnFromAnnotation() {
     renderReading();
     showView($("#reading-view"));
     startPolling();
+    $("#camera-panel").classList.toggle("hidden", !cameraSupported());
+    await startCamera();
     return;
   }
   renderHome();
@@ -493,6 +546,7 @@ $("#auth-form").addEventListener("submit", async (event) => {
 });
 
 $("#logout-button").addEventListener("click", async () => {
+  stopCamera();
   await api("/api/auth/logout", { method: "POST", body: "{}" });
   state.user = null;
   state.capabilities = [];
@@ -546,6 +600,8 @@ $("#start-reading").addEventListener("click", async () => {
     renderReading();
     showView($("#reading-view"));
     startPolling();
+    $("#camera-panel").classList.toggle("hidden", !cameraSupported());
+    await startCamera();
   } catch (error) {
     toast(error.message);
   }
@@ -595,6 +651,7 @@ $("#approve-comment").addEventListener("click", () => reviewActiveComment("appro
 $("#reject-comment").addEventListener("click", () => reviewActiveComment("rejected"));
 
 $("#back-home").addEventListener("click", () => {
+  stopCamera();
   stopPolling();
   renderHome();
   showView($("#home-view"));
@@ -683,6 +740,7 @@ $("#end-reading").addEventListener("click", async () => {
   try {
     await api("/api/reading/end", { method: "POST", body: "{}" });
     state.readingSession = null;
+    stopCamera();
     stopPolling();
     renderHome();
     showView($("#home-view"));
@@ -690,6 +748,13 @@ $("#end-reading").addEventListener("click", async () => {
   } catch (error) {
     toast(error.message);
   }
+});
+
+
+
+$("#camera-toggle").addEventListener("click", async () => {
+  if (state.cameraStream) stopCamera();
+  else await startCamera();
 });
 
 bootstrap();

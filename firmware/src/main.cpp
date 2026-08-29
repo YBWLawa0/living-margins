@@ -649,8 +649,8 @@ void show_state(JsonDocument &doc) {
 
 void poll_state() {
     HTTPClient http;
-    http.setConnectTimeout(1500);
-    http.setTimeout(1500);
+    http.setConnectTimeout(3000);
+    http.setTimeout(6000);
     String endpoint = web_url + "/api/device/state";
     if (!http.begin(endpoint)) return;
     http.addHeader("Content-Type", "application/json");
@@ -662,7 +662,7 @@ void poll_state() {
     int code = http.POST(body);
     if (code != HTTP_CODE_OK) {
         http.end();
-        show_network_message("COMPUTER OFFLINE", kBad, "电脑状态接口暂时不可用");
+        show_network_message("CLOUD OFFLINE", kBad, "云端状态接口暂时不可用");
         return;
     }
     JsonDocument doc;
@@ -779,8 +779,8 @@ void request_pairing_qr() {
 void fetch_current_feedback(const String &comment_id) {
     if (comment_id.isEmpty()) return;
     HTTPClient http;
-    http.setConnectTimeout(1500);
-    http.setTimeout(1500);
+    http.setConnectTimeout(3000);
+    http.setTimeout(6000);
     String endpoint = web_url + "/api/device/feedback/current";
     if (!http.begin(endpoint)) return;
     http.addHeader("Content-Type", "application/json");
@@ -803,8 +803,8 @@ void fetch_current_feedback(const String &comment_id) {
 void submit_feedback(const String &action) {
     if (current_comment_id.isEmpty()) return;
     HTTPClient http;
-    http.setConnectTimeout(1500);
-    http.setTimeout(1500);
+    http.setConnectTimeout(3000);
+    http.setTimeout(6000);
     String endpoint = web_url + "/api/device/feedback";
     if (!http.begin(endpoint)) return;
     http.addHeader("Content-Type", "application/json");

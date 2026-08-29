@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import json
+import os
 import mimetypes
 import re
 import time
@@ -20,10 +22,13 @@ from library_terra.web_database import SESSION_TTL_SECONDS, WebDatabase
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 WEB_ROOT = PROJECT_ROOT / "web"
-RUNTIME_ROOT = PROJECT_ROOT / "runtime"
-BOOKS_ROOT = PROJECT_ROOT / "books"
+RUNTIME_ROOT = Path(os.environ.get("LM_RUNTIME_ROOT", str(PROJECT_ROOT / "runtime")))
+BOOKS_ROOT = Path(os.environ.get("LM_BOOKS_ROOT", str(PROJECT_ROOT / "books")))
+MOBILE_FRAME_ROOT = Path(
+    os.environ.get("LM_MOBILE_FRAME_ROOT", str(RUNTIME_ROOT / "mobile_frames"))
+)
 COOKIE_NAME = "living_margins_session"
-WEB_API_VERSION = 9
+WEB_API_VERSION = 10
 WEB_CAPABILITIES = [
     "inspirations",
     "comment_review",
@@ -34,6 +39,7 @@ WEB_CAPABILITIES = [
     "realtime_long_poll",
     "device_presence",
     "firmware_ota",
+    "mobile_camera_ingest",
 ]
 
 
@@ -91,8 +97,14 @@ def publish_approved_comment(
 
 FIRMWARE_RELEASE_ROOT = RUNTIME_ROOT / "firmware"
 FIRMWARE_RELEASE_MANIFEST = FIRMWARE_RELEASE_ROOT / "release.json"
-FIRMWARE_VERSION_PATTERN = re.compile(r"^[0-9]+.[0-9]+.[0-9]+$")
+FIRMWARE_VERSION_PATTERN = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 MAX_OTA_BINARY_SIZE = 0x640000
+VISION_SOURCE = os.environ.get("LM_VISION_SOURCE", "local").strip().lower()
+RELAY_TOKEN = os.environ.get("LM_RELAY_TOKEN", "")
+RELAY_MAX_AGE_SECONDS = float(os.environ.get("LM_RELAY_MAX_AGE_SECONDS", "15"))
+RELAY_STATE_PATH = Path(
+    os.environ.get("LM_RELAY_STATE_PATH", str(RUNTIME_ROOT / "relay_state.json"))
+)
 
 
 def _version_tuple(value: str) -> tuple[int, int, int]:
@@ -135,6 +147,46 @@ def read_firmware_release() -> dict[str, Any] | None:
         }
     except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
         return None
+
+def read_relay_state() -> dict[str, Any] | None:
+    try:
+        payload = RELAY_STATE_PATH.read_bytes()
+        if len(payload) > 1_048_576:
+            return None
+        value = json.loads(payload.decode("utf-8"))
+        if not isinstance(value, dict):
+            return None
+        received_at = float(value.pop("_relay_received_at", 0))
+        if received_at <= 0 or time.time() - received_at > RELAY_MAX_AGE_SECONDS:
+            return None
+        return value
+    except (OSError, ValueError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+
+
+def write_relay_state(value: dict[str, Any]) -> dict[str, Any]:
+    revision = value.get("revision")
+    if not isinstance(revision, int) or revision < 0:
+        raise ValueError("状态版本无效")
+    status = str(value.get("status") or "")
+    allowed = {"stable", "turning", "verifying", "unconfirmed", "recognizing", "stopped"}
+    if status not in allowed:
+        raise ValueError("阅读状态无效")
+    current = read_relay_state()
+    if current is not None and int(current.get("revision", -1)) > revision:
+        raise ValueError("不能覆盖更新的阅读状态")
+    RELAY_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary = RELAY_STATE_PATH.with_suffix(".tmp")
+    persisted = dict(value)
+    persisted["_relay_received_at"] = time.time()
+    temporary.write_text(json.dumps(persisted, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(RELAY_STATE_PATH)
+    return value
+
+
+def current_vision_state() -> dict[str, Any] | None:
+    return read_relay_state() if VISION_SOURCE == "relay" else read_vision_state()
+
 
 def create_handler(database: WebDatabase):
     class Handler(BaseHTTPRequestHandler):
@@ -238,7 +290,7 @@ def create_handler(database: WebDatabase):
                 user = self._require_user()
                 if user is None:
                     return
-                vision = read_vision_state()
+                vision = current_vision_state()
                 database.sync_reading_context(int(user["id"]), vision)
                 review_queue = (
                     database.pending_comments_for_admin(int(user["id"]))
@@ -265,7 +317,7 @@ def create_handler(database: WebDatabase):
                 user = self._require_user()
                 if user is None:
                     return
-                vision = read_vision_state()
+                vision = current_vision_state()
                 database.sync_reading_context(int(user["id"]), vision)
                 self._send_json(HTTPStatus.OK, {"ok": True, "vision": vision})
                 return
@@ -276,6 +328,40 @@ def create_handler(database: WebDatabase):
 
         def do_POST(self) -> None:
             route = self._route()
+            if route == "/api/vision/frame":
+                user = self._require_user()
+                if user is None:
+                    return
+                session = database.current_reading_session(int(user["id"]))
+                if session is None or session.get("status") != "active":
+                    self._send_error_json(HTTPStatus.CONFLICT, "请先开始阅读")
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                except ValueError:
+                    length = 0
+                if (
+                    not self.headers.get("Content-Type", "").startswith("image/jpeg")
+                    or length <= 0
+                    or length > 1_500_000
+                ):
+                    self._send_error_json(HTTPStatus.BAD_REQUEST, "图片格式或大小无效")
+                    return
+                payload = self.rfile.read(length)
+                if len(payload) != length or not payload.startswith(b"\xff\xd8") or not payload.endswith(b"\xff\xd9"):
+                    self._send_error_json(HTTPStatus.BAD_REQUEST, "JPEG 图片无效")
+                    return
+                MOBILE_FRAME_ROOT.mkdir(parents=True, exist_ok=True)
+                target = MOBILE_FRAME_ROOT / f"user-{int(user['id'])}.jpg"
+                temporary = target.with_suffix(".tmp")
+                temporary.write_bytes(payload)
+                temporary.replace(target)
+                self._send_json(
+                    HTTPStatus.ACCEPTED,
+                    {"ok": True, "bytes": length, "uploaded_at": time.time()},
+                )
+                return
+
             try:
                 body = self._read_json()
             except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -288,6 +374,21 @@ def create_handler(database: WebDatabase):
             if route == "/api/auth/logout":
                 database.revoke_token(self._token())
                 self._send_json(HTTPStatus.OK, {"ok": True}, clear_cookie=True)
+                return
+
+            if route == "/api/relay/state":
+                supplied = self.headers.get("X-Relay-Token", "")
+                if not RELAY_TOKEN or not hmac.compare_digest(supplied, RELAY_TOKEN):
+                    self._send_error_json(HTTPStatus.UNAUTHORIZED, "上行代理认证失败")
+                    return
+                try:
+                    state = write_relay_state(body)
+                    self._send_json(
+                        HTTPStatus.OK,
+                        {"ok": True, "revision": state["revision"]},
+                    )
+                except (OSError, ValueError, TypeError) as exc:
+                    self._send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
                 return
 
             if route in {
@@ -367,7 +468,7 @@ def create_handler(database: WebDatabase):
                         "realtime" if wait_ms > 0 else "polling",
                     )
                     deadline = time.monotonic() + wait_ms / 1000
-                    vision = read_vision_state()
+                    vision = current_vision_state()
                     while (
                         wait_ms > 0
                         and isinstance(vision, dict)
@@ -375,7 +476,7 @@ def create_handler(database: WebDatabase):
                         and time.monotonic() < deadline
                     ):
                         time.sleep(min(0.15, max(0.0, deadline - time.monotonic())))
-                        vision = read_vision_state()
+                        vision = current_vision_state()
                     changed = (
                         isinstance(vision, dict) and vision.get("revision") != revision
                     )
@@ -453,7 +554,7 @@ def create_handler(database: WebDatabase):
                     self._send_json(HTTPStatus.OK, {"ok": True, "comment": comment})
                     return
                 if route == "/api/inspirations/mark":
-                    vision = read_vision_state()
+                    vision = current_vision_state()
                     inspiration, created = database.mark_inspiration(user_id, vision)
                     self._send_json(
                         HTTPStatus.CREATED if created else HTTPStatus.OK,
@@ -501,7 +602,7 @@ def create_handler(database: WebDatabase):
                     "/api/reading/end",
                 }:
                     if route == "/api/reading/pause":
-                        vision = read_vision_state()
+                        vision = current_vision_state()
                         if not vision or not vision.get("book_id") or not vision.get("pages"):
                             raise ValueError("识别服务尚未确认书籍和页码，暂时不能写批注")
                         database.sync_reading_context(user_id, vision)

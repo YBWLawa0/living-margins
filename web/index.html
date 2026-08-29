@@ -9,13 +9,13 @@
       content="众生行记 Living Margins，让实体书页遇见读过它的人。"
     />
     <title>众生行记 · Living Margins</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <main id="app" class="site-shell">
       <section id="auth-view" class="view auth-view">
         <header class="site-header">
-          <a class="wordmark" href="/" aria-label="众生行记首页">
+          <a class="wordmark" href="./" aria-label="众生行记首页">
             <strong>众生行记</strong>
             <span>LIVING MARGINS</span>
           </a>
@@ -79,7 +79,7 @@
 
       <section id="home-view" class="view home-view hidden">
         <header class="site-header">
-          <a class="wordmark" href="/" aria-label="众生行记首页">
+          <a class="wordmark" href="./" aria-label="众生行记首页">
             <strong>众生行记</strong>
             <span>LIVING MARGINS</span>
           </a>
@@ -210,6 +210,17 @@
             <strong id="current-pages" class="current-pages">—</strong>
             <p id="current-state" class="current-state">请把书放入摄像头画面</p>
           </section>
+          <section id="camera-panel" class="camera-panel hidden">
+            <div class="camera-preview">
+              <video id="camera-video" playsinline muted></video>
+              <canvas id="camera-canvas" hidden></canvas>
+              <p id="camera-placeholder">启动摄像头后，请让书页完整出现在画面中</p>
+            </div>
+            <div class="camera-controls">
+              <span id="camera-status" class="mono-label">摄像头尚未启动</span>
+              <button id="camera-toggle" type="button" class="button button-secondary">启动手机摄像头</button>
+            </div>
+          </section>
 
           <section class="reading-details">
             <div class="detail-row">
@@ -332,6 +343,6 @@
     </div>
 
     <div id="toast" class="toast hidden" aria-live="polite"></div>
-    <script src="/app.js" defer></script>
+    <script src="app.js" defer></script>
   </body>
 </html>

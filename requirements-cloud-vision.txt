@@ -1,0 +1,9 @@
+opencv-python-headless>=4.9,<5
+numpy>=1.24,<3
+onnxruntime>=1.7
+Pillow
+pyclipper>=1.2
+PyYAML
+Shapely!=2.0.4,>=1.7.1
+six>=1.15
+tqdm

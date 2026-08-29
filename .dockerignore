@@ -1,0 +1,8 @@
+.git
+.venv
+__pycache__
+debug
+runtime
+firmware/.pio
+firmware/include/device_secrets.h
+*.log
