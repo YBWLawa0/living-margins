@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import mimetypes
+import re
+import time
 from http import HTTPStatus
 from http.client import HTTPConnection, HTTPException
 from http.cookies import SimpleCookie
@@ -20,8 +23,18 @@ WEB_ROOT = PROJECT_ROOT / "web"
 RUNTIME_ROOT = PROJECT_ROOT / "runtime"
 BOOKS_ROOT = PROJECT_ROOT / "books"
 COOKIE_NAME = "living_margins_session"
-WEB_API_VERSION = 3
-WEB_CAPABILITIES = ["inspirations", "comment_review", "user_feedback"]
+WEB_API_VERSION = 9
+WEB_CAPABILITIES = [
+    "inspirations",
+    "comment_review",
+    "user_feedback",
+    "device_tokens",
+    "qr_pairing",
+    "device_state_gateway",
+    "realtime_long_poll",
+    "device_presence",
+    "firmware_ota",
+]
 
 
 def _vision_state_port() -> int:
@@ -76,6 +89,53 @@ def publish_approved_comment(
     return saved.state_value()
 
 
+FIRMWARE_RELEASE_ROOT = RUNTIME_ROOT / "firmware"
+FIRMWARE_RELEASE_MANIFEST = FIRMWARE_RELEASE_ROOT / "release.json"
+FIRMWARE_VERSION_PATTERN = re.compile(r"^[0-9]+.[0-9]+.[0-9]+$")
+MAX_OTA_BINARY_SIZE = 0x640000
+
+
+def _version_tuple(value: str) -> tuple[int, int, int]:
+    version = value.strip()
+    if not FIRMWARE_VERSION_PATTERN.fullmatch(version):
+        raise ValueError("固件版本号无效")
+    return tuple(int(part) for part in version.split("."))
+
+
+def read_firmware_release() -> dict[str, Any] | None:
+    try:
+        manifest = json.loads(FIRMWARE_RELEASE_MANIFEST.read_text(encoding="utf-8"))
+        version = str(manifest["version"])
+        _version_tuple(version)
+        size = int(manifest["size"])
+        expected_sha256 = str(manifest["sha256"]).lower()
+        binary_name = str(manifest.get("binary") or "firmware.bin")
+        binary_path = (FIRMWARE_RELEASE_ROOT / binary_name).resolve()
+        if binary_path.parent != FIRMWARE_RELEASE_ROOT.resolve():
+            return None
+        if (
+            size <= 0
+            or size > MAX_OTA_BINARY_SIZE
+            or len(expected_sha256) != 64
+            or not binary_path.is_file()
+            or binary_path.stat().st_size != size
+        ):
+            return None
+        digest = hashlib.sha256()
+        with binary_path.open("rb") as source:
+            for chunk in iter(lambda: source.read(65_536), b""):
+                digest.update(chunk)
+        if digest.hexdigest() != expected_sha256:
+            return None
+        return {
+            "version": version,
+            "size": size,
+            "sha256": expected_sha256,
+            "path": binary_path,
+        }
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        return None
+
 def create_handler(database: WebDatabase):
     class Handler(BaseHTTPRequestHandler):
         server_version = "LivingMarginsWeb/1"
@@ -108,6 +168,18 @@ def create_handler(database: WebDatabase):
             self.end_headers()
             self.wfile.write(payload)
 
+        def _send_binary(self, release: dict[str, Any]) -> None:
+            path = release["path"]
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(release["size"]))
+            self.send_header("X-Firmware-Version", str(release["version"]))
+            self.send_header("X-Firmware-SHA256", str(release["sha256"]))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            with path.open("rb") as source:
+                for chunk in iter(lambda: source.read(65_536), b""):
+                    self.wfile.write(chunk)
         def _send_error_json(self, status: HTTPStatus, message: str) -> None:
             self._send_json(status, {"ok": False, "error": message})
 
@@ -147,6 +219,18 @@ def create_handler(database: WebDatabase):
                         "ok": True,
                         "api_version": WEB_API_VERSION,
                         "capabilities": WEB_CAPABILITIES,
+                    },
+                )
+                return
+            if route == "/api/devices":
+                user = self._require_user()
+                if user is None:
+                    return
+                self._send_json(
+                    HTTPStatus.OK,
+                    {
+                        "ok": True,
+                        "devices": database.devices_for_user(int(user["id"])),
                     },
                 )
                 return
@@ -206,12 +290,111 @@ def create_handler(database: WebDatabase):
                 self._send_json(HTTPStatus.OK, {"ok": True}, clear_cookie=True)
                 return
 
+            if route in {
+                "/api/device/firmware/check",
+                "/api/device/firmware/download",
+            }:
+                try:
+                    current_version = str(body.get("current_version", ""))
+                    current_key = _version_tuple(current_version)
+                    database.touch_device(
+                        str(body.get("machine_code", "")),
+                        str(body.get("device_token", "")),
+                    )
+                    release = read_firmware_release()
+                    if route == "/api/device/firmware/check":
+                        available = (
+                            release is not None
+                            and _version_tuple(str(release["version"])) > current_key
+                        )
+                        public_release = (
+                            {
+                                "version": release["version"],
+                                "size": release["size"],
+                                "sha256": release["sha256"],
+                            }
+                            if available
+                            else None
+                        )
+                        self._send_json(
+                            HTTPStatus.OK,
+                            {
+                                "ok": True,
+                                "current_version": current_version,
+                                "available": available,
+                                "release": public_release,
+                            },
+                        )
+                    elif release is None:
+                        self._send_error_json(
+                            HTTPStatus.NOT_FOUND, "服务器没有可用的固件包"
+                        )
+                    elif _version_tuple(str(release["version"])) <= current_key:
+                        self._send_error_json(
+                            HTTPStatus.CONFLICT, "当前已经是最新固件"
+                        )
+                    else:
+                        self._send_binary(release)
+                except PermissionError as exc:
+                    self._send_error_json(HTTPStatus.UNAUTHORIZED, str(exc))
+                except (ValueError, TypeError) as exc:
+                    self._send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                return
+            if route == "/api/device/pairing/start":
+                try:
+                    pairing = database.start_device_pairing(
+                        str(body.get("machine_code", "")),
+                        str(body.get("device_token", "")),
+                    )
+                    self._send_json(HTTPStatus.CREATED, {"ok": True, "pairing": pairing})
+                except PermissionError as exc:
+                    self._send_error_json(HTTPStatus.UNAUTHORIZED, str(exc))
+                except (ValueError, TypeError) as exc:
+                    self._send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+                return
+            if route == "/api/device/state":
+                try:
+                    raw_revision = body.get("revision")
+                    revision = None if raw_revision is None else int(raw_revision)
+                    wait_ms = int(body.get("wait_ms", 0))
+                    if wait_ms < 0 or wait_ms > 10_000:
+                        raise ValueError("状态等待时间无效")
+                    database.touch_device(
+                        str(body.get("machine_code", "")),
+                        str(body.get("device_token", "")),
+                        "realtime" if wait_ms > 0 else "polling",
+                    )
+                    deadline = time.monotonic() + wait_ms / 1000
+                    vision = read_vision_state()
+                    while (
+                        wait_ms > 0
+                        and isinstance(vision, dict)
+                        and vision.get("revision") == revision
+                        and time.monotonic() < deadline
+                    ):
+                        time.sleep(min(0.15, max(0.0, deadline - time.monotonic())))
+                        vision = read_vision_state()
+                    changed = (
+                        isinstance(vision, dict) and vision.get("revision") != revision
+                    )
+                    self._send_json(
+                        HTTPStatus.OK,
+                        {"ok": True, "vision": vision, "changed": changed},
+                    )
+                except PermissionError as exc:
+                    self._send_error_json(HTTPStatus.UNAUTHORIZED, str(exc))
+                except (ValueError, TypeError) as exc:
+                    self._send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+                return
             if route in {"/api/device/feedback", "/api/device/feedback/current"}:
                 try:
                     machine_code = str(body.get("machine_code", ""))
+                    device_token = str(body.get("device_token", ""))
                     comment_id = str(body.get("comment_id", ""))
                     if route == "/api/device/feedback/current":
-                        feedback = database.feedback_for_device(machine_code, comment_id)
+                        feedback = database.feedback_for_device(machine_code, device_token, comment_id)
                         self._send_json(
                             HTTPStatus.OK, {"ok": True, "feedback": feedback}
                         )
@@ -220,6 +403,7 @@ def create_handler(database: WebDatabase):
                         page = int(raw_page) if raw_page is not None else None
                         feedback, outcome = database.submit_device_feedback(
                             machine_code,
+                            device_token,
                             comment_id,
                             str(body.get("action", "")),
                             book_id=str(body.get("book_id") or "") or None,
@@ -233,6 +417,8 @@ def create_handler(database: WebDatabase):
                                 "outcome": outcome,
                             },
                         )
+                except PermissionError as exc:
+                    self._send_error_json(HTTPStatus.UNAUTHORIZED, str(exc))
                 except (ValueError, TypeError) as exc:
                     self._send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
                 return
@@ -242,6 +428,12 @@ def create_handler(database: WebDatabase):
                 return
             user_id = int(user["id"])
             try:
+                if route == "/api/devices/pair/claim":
+                    device = database.claim_device_pairing(
+                        user_id, str(body.get("pairing_token", ""))
+                    )
+                    self._send_json(HTTPStatus.OK, {"ok": True, "device": device})
+                    return
                 if route == "/api/devices/bind":
                     device = database.bind_device(user_id, str(body.get("machine_code", "")))
                     self._send_json(HTTPStatus.OK, {"ok": True, "device": device})

@@ -20,6 +20,7 @@ class WebServerTests(unittest.TestCase):
         self.vision_patcher = patch("living_margins_web.read_vision_state", return_value=None)
         self.vision_mock = self.vision_patcher.start()
         database = WebDatabase(Path(self.temporary.name) / "app.db")
+        self.device_token = database.rotate_device_token(DEMO_DEVICE_CODE)
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(database))
         self.server.daemon_threads = True
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -41,6 +42,10 @@ class WebServerTests(unittest.TestCase):
         headers = {"Content-Type": "application/json"}
         if self.cookie:
             headers["Cookie"] = self.cookie
+        if path.startswith("/api/device/feedback") and body is not None:
+            body = dict(body)
+            body.setdefault("device_token", self.device_token)
+            payload = json.dumps(body).encode("utf-8")
         connection.request(method, path, body=payload, headers=headers)
         response = connection.getresponse()
         raw = response.read()
@@ -50,6 +55,110 @@ class WebServerTests(unittest.TestCase):
             self.cookie = response_headers["Set-Cookie"].split(";", 1)[0]
         return response.status, json.loads(raw), response_headers
 
+    def test_qr_pairing_contract(self) -> None:
+        status, pairing, _ = self.request(
+            "POST",
+            "/api/device/pairing/start",
+            {"machine_code": DEMO_DEVICE_CODE, "device_token": self.device_token},
+        )
+        self.assertEqual(status, 201)
+        claim_token = pairing["pairing"]["pairing_token"]
+
+        status, _, _ = self.request(
+            "POST", "/api/auth/register", {"username": "scanner", "password": "secret12"}
+        )
+        self.assertEqual(status, 200)
+        status, claimed, _ = self.request(
+            "POST", "/api/devices/pair/claim", {"pairing_token": claim_token}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(claimed["device"]["machine_code"], DEMO_DEVICE_CODE)
+        status, duplicate, _ = self.request(
+            "POST", "/api/devices/pair/claim", {"pairing_token": claim_token}
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("已经使用", duplicate["error"])
+
+    def test_device_state_gateway_authenticates_and_relays_vision(self) -> None:
+        status, _, _ = self.request(
+            "POST", "/api/auth/register", {"username": "relay", "password": "secret12"}
+        )
+        self.assertEqual(status, 200)
+        status, _, _ = self.request(
+            "POST", "/api/devices/bind", {"machine_code": DEMO_DEVICE_CODE}
+        )
+        self.assertEqual(status, 200)
+        self.vision_mock.return_value = {
+            "revision": 21,
+            "book_id": "relay-book",
+            "title": "服务器转发",
+            "pages": [8, 9],
+            "status": "stable",
+        }
+
+        status, response, _ = self.request(
+            "POST",
+            "/api/device/state",
+            {
+                "machine_code": DEMO_DEVICE_CODE,
+                "device_token": self.device_token,
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(response["vision"]["revision"], 21)
+        self.assertTrue(response["changed"])
+
+        status, unchanged, _ = self.request(
+            "POST",
+            "/api/device/state",
+            {
+                "machine_code": DEMO_DEVICE_CODE,
+                "device_token": self.device_token,
+                "revision": 21,
+                "wait_ms": 0,
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertFalse(unchanged["changed"])
+
+        status, realtime, _ = self.request(
+            "POST",
+            "/api/device/state",
+            {
+                "machine_code": DEMO_DEVICE_CODE,
+                "device_token": self.device_token,
+                "revision": 21,
+                "wait_ms": 1,
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertFalse(realtime["changed"])
+
+        status, presence, _ = self.request("GET", "/api/devices")
+        self.assertEqual(status, 200)
+        self.assertTrue(presence["devices"][0]["online"])
+        self.assertEqual(presence["devices"][0]["connection_mode"], "realtime")
+
+        status, invalid_wait, _ = self.request(
+            "POST",
+            "/api/device/state",
+            {
+                "machine_code": DEMO_DEVICE_CODE,
+                "device_token": self.device_token,
+                "revision": 21,
+                "wait_ms": 10001,
+            },
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("等待时间", invalid_wait["error"])
+
+        status, response, _ = self.request(
+            "POST",
+            "/api/device/state",
+            {"machine_code": DEMO_DEVICE_CODE, "device_token": "wrong"},
+        )
+        self.assertEqual(status, 401)
+        self.assertIn("令牌", response["error"])
     def test_auth_binding_and_reading_session_contract(self) -> None:
         status, _, _ = self.request("GET", "/api/bootstrap")
         self.assertEqual(status, 401)

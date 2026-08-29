@@ -74,6 +74,7 @@ class WebDatabase:
                     name TEXT NOT NULL,
                     paired_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
                     last_seen_at REAL,
+                    connection_mode TEXT,
                     created_at REAL NOT NULL
                 );
                 CREATE UNIQUE INDEX IF NOT EXISTS devices_machine_code_unique
@@ -81,6 +82,18 @@ class WebDatabase:
                 CREATE INDEX IF NOT EXISTS devices_paired_user
                     ON devices(paired_user_id);
 
+                CREATE TABLE IF NOT EXISTS device_pairing_sessions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+                    token_hash TEXT NOT NULL,
+                    expires_at REAL NOT NULL,
+                    claimed_at REAL,
+                    created_at REAL NOT NULL
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS device_pairing_token_unique
+                    ON device_pairing_sessions(token_hash);
+                CREATE INDEX IF NOT EXISTS device_pairing_expiry
+                    ON device_pairing_sessions(expires_at);
                 CREATE TABLE IF NOT EXISTS comment_feedback (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -170,6 +183,14 @@ class WebDatabase:
                 str(row["name"])
                 for row in connection.execute("PRAGMA table_info(web_comments)")
             }
+            device_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(devices)")
+            }
+            if "token_hash" not in device_columns:
+                connection.execute("ALTER TABLE devices ADD COLUMN token_hash TEXT")
+            if "connection_mode" not in device_columns:
+                connection.execute("ALTER TABLE devices ADD COLUMN connection_mode TEXT")
             if "inspiration_id" not in comment_columns:
                 connection.execute(
                     "ALTER TABLE web_comments ADD COLUMN inspiration_id INTEGER"
@@ -328,13 +349,30 @@ class WebDatabase:
         assert updated is not None
         return self._public_device(updated)
 
+    def rotate_device_token(self, machine_code: str) -> str:
+        """Issue a new device credential and invalidate the previous one."""
+        code = machine_code.strip().upper()
+        token = secrets.token_urlsafe(32)
+        with self._connection() as connection:
+            cursor = connection.execute(
+                "UPDATE devices SET token_hash = ? WHERE machine_code = ? COLLATE NOCASE",
+                (self._token_hash(token), code),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("没有找到这台屏幕")
+        return token
+
     @staticmethod
     def _public_device(row: sqlite3.Row) -> dict[str, Any]:
+        last_seen_at = row["last_seen_at"]
+        online = last_seen_at is not None and time.time() - float(last_seen_at) <= 20
         return {
             "id": int(row["id"]),
             "machine_code": str(row["machine_code"]),
             "name": str(row["name"]),
-            "last_seen_at": row["last_seen_at"],
+            "last_seen_at": last_seen_at,
+            "online": online,
+            "connection_mode": row["connection_mode"] if online else None,
         }
 
     def devices_for_user(self, user_id: int) -> list[dict[str, Any]]:
@@ -358,9 +396,76 @@ class WebDatabase:
             "updated_at": float(row["updated_at"]),
         }
 
+    def start_device_pairing(
+        self, machine_code: str, device_token: str, ttl_seconds: int = 300
+    ) -> dict[str, Any]:
+        if ttl_seconds < 30 or ttl_seconds > 900:
+            raise ValueError("配对有效期无效")
+        code = machine_code.strip().upper()
+        now = time.time()
+        claim_token = secrets.token_urlsafe(24)
+        with self._connection() as connection:
+            device = connection.execute(
+                "SELECT * FROM devices WHERE machine_code = ? COLLATE NOCASE", (code,)
+            ).fetchone()
+            if device is None:
+                raise ValueError("没有找到这台屏幕")
+            expected = str(device["token_hash"] or "")
+            actual = self._token_hash(device_token) if device_token else ""
+            if not expected or not hmac.compare_digest(actual, expected):
+                raise PermissionError("设备令牌无效")
+            connection.execute(
+                "DELETE FROM device_pairing_sessions WHERE device_id = ? OR expires_at <= ?",
+                (device["id"], now),
+            )
+            connection.execute(
+                """
+                INSERT INTO device_pairing_sessions(
+                    device_id, token_hash, expires_at, created_at
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (device["id"], self._token_hash(claim_token), now + ttl_seconds, now),
+            )
+        return {"pairing_token": claim_token, "expires_at": now + ttl_seconds}
+
+    def claim_device_pairing(self, user_id: int, pairing_token: str) -> dict[str, Any]:
+        token = pairing_token.strip()
+        if not token:
+            raise ValueError("配对链接无效")
+        now = time.time()
+        with self._connection() as connection:
+            pairing = connection.execute(
+                """
+                SELECT device_pairing_sessions.*, devices.paired_user_id
+                FROM device_pairing_sessions
+                JOIN devices ON devices.id = device_pairing_sessions.device_id
+                WHERE device_pairing_sessions.token_hash = ?
+                """,
+                (self._token_hash(token),),
+            ).fetchone()
+            if pairing is None or pairing["expires_at"] <= now:
+                raise ValueError("配对链接已失效，请在屏幕上重新生成")
+            if pairing["claimed_at"] is not None:
+                raise ValueError("配对链接已经使用")
+            owner = pairing["paired_user_id"]
+            if owner is not None and int(owner) != user_id:
+                raise ValueError("这台屏幕已经被其他用户绑定")
+            connection.execute(
+                "UPDATE devices SET paired_user_id = ?, last_seen_at = ? WHERE id = ?",
+                (user_id, now, pairing["device_id"]),
+            )
+            connection.execute(
+                "UPDATE device_pairing_sessions SET claimed_at = ? WHERE id = ?",
+                (now, pairing["id"]),
+            )
+            device = connection.execute(
+                "SELECT * FROM devices WHERE id = ?", (pairing["device_id"],)
+            ).fetchone()
+        assert device is not None
+        return self._public_device(device)
     @staticmethod
     def _paired_device(
-        connection: sqlite3.Connection, machine_code: str
+        connection: sqlite3.Connection, machine_code: str, device_token: str
     ) -> sqlite3.Row:
         code = machine_code.strip().upper()
         row = connection.execute(
@@ -370,16 +475,20 @@ class WebDatabase:
             raise ValueError("没有找到这台屏幕")
         if row["paired_user_id"] is None:
             raise ValueError("这台屏幕尚未绑定用户")
+        expected = str(row["token_hash"] or "")
+        actual = WebDatabase._token_hash(device_token) if device_token else ""
+        if not expected or not hmac.compare_digest(actual, expected):
+            raise PermissionError("设备令牌无效")
         return row
 
     def feedback_for_device(
-        self, machine_code: str, comment_id: str
+        self, machine_code: str, device_token: str, comment_id: str
     ) -> dict[str, Any] | None:
         target_comment_id = comment_id.strip()
         if not target_comment_id:
             raise ValueError("批注编号不能为空")
         with self._connection() as connection:
-            device = self._paired_device(connection, machine_code)
+            device = self._paired_device(connection, machine_code, device_token)
             row = connection.execute(
                 """
                 SELECT * FROM comment_feedback
@@ -393,9 +502,38 @@ class WebDatabase:
             )
         return None if row is None else self._public_feedback(row)
 
+    def touch_device(
+        self, machine_code: str, device_token: str, connection_mode: str | None = None
+    ) -> dict[str, Any]:
+        """Authenticate a paired device and update its online heartbeat."""
+        if connection_mode not in {"realtime", "polling"}:
+            raise ValueError("设备连接模式无效")
+        now = time.time()
+        with self._connection() as connection:
+            device = self._paired_device(connection, machine_code, device_token)
+            if connection_mode is None:
+                connection.execute(
+                    "UPDATE devices SET last_seen_at = ? WHERE id = ?",
+                    (now, device["id"]),
+                )
+            else:
+                connection.execute(
+                    """
+                    UPDATE devices
+                    SET last_seen_at = ?, connection_mode = ?
+                    WHERE id = ?
+                    """,
+                    (now, connection_mode, device["id"]),
+                )
+            updated = connection.execute(
+                "SELECT * FROM devices WHERE id = ?", (device["id"],)
+            ).fetchone()
+        assert updated is not None
+        return self._public_device(updated)
     def submit_device_feedback(
         self,
         machine_code: str,
+        device_token: str,
         comment_id: str,
         action: str,
         *,
@@ -412,7 +550,7 @@ class WebDatabase:
             raise ValueError("反馈页码无效")
         now = time.time()
         with self._connection() as connection:
-            device = self._paired_device(connection, machine_code)
+            device = self._paired_device(connection, machine_code, device_token)
             user_id = int(device["paired_user_id"])
             existing = connection.execute(
                 """

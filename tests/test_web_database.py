@@ -11,6 +11,7 @@ class WebDatabaseTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.database = WebDatabase(Path(self.temporary.name) / "living_margins.db")
+        self.device_token = self.database.rotate_device_token(DEMO_DEVICE_CODE)
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -46,14 +47,34 @@ class WebDatabaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "其他用户"):
             self.database.bind_device(second["id"], DEMO_DEVICE_CODE)
 
+    def test_pairing_token_is_short_lived_single_use_and_owner_safe(self) -> None:
+        owner = self.database.create_user("owner", "secret12")
+        other = self.database.create_user("other", "secret12")
+        pairing = self.database.start_device_pairing(
+            DEMO_DEVICE_CODE, self.device_token, ttl_seconds=60
+        )
+        device = self.database.claim_device_pairing(owner["id"], pairing["pairing_token"])
+        self.assertEqual(self.database.devices_for_user(owner["id"]), [device])
+        with self.assertRaisesRegex(ValueError, "已经使用"):
+            self.database.claim_device_pairing(owner["id"], pairing["pairing_token"])
+
+        second = self.database.start_device_pairing(DEMO_DEVICE_CODE, self.device_token)
+        with self.assertRaisesRegex(ValueError, "其他用户"):
+            self.database.claim_device_pairing(other["id"], second["pairing_token"])
+        with self.assertRaisesRegex(PermissionError, "令牌无效"):
+            self.database.start_device_pairing(DEMO_DEVICE_CODE, "wrong-token")
     def test_device_feedback_is_unique_per_user_and_supports_vote_change(self) -> None:
         user = self.database.create_user("reader", "secret12")
         with self.assertRaisesRegex(ValueError, "尚未绑定"):
-            self.database.feedback_for_device(DEMO_DEVICE_CODE, "comment-1")
+            self.database.feedback_for_device(DEMO_DEVICE_CODE, self.device_token, "comment-1")
         self.database.bind_device(user["id"], DEMO_DEVICE_CODE)
+
+        with self.assertRaisesRegex(PermissionError, "令牌无效"):
+            self.database.feedback_for_device(DEMO_DEVICE_CODE, "wrong-token", "comment-1")
 
         created, created_outcome = self.database.submit_device_feedback(
             DEMO_DEVICE_CODE,
+            self.device_token,
             "comment-1",
             "agree",
             book_id="book-a",
@@ -61,6 +82,7 @@ class WebDatabaseTests(unittest.TestCase):
         )
         unchanged, unchanged_outcome = self.database.submit_device_feedback(
             DEMO_DEVICE_CODE,
+            self.device_token,
             "comment-1",
             "agree",
             book_id="book-a",
@@ -68,6 +90,7 @@ class WebDatabaseTests(unittest.TestCase):
         )
         changed, changed_outcome = self.database.submit_device_feedback(
             DEMO_DEVICE_CODE,
+            self.device_token,
             "comment-1",
             "disagree",
             book_id="book-a",
@@ -81,7 +104,7 @@ class WebDatabaseTests(unittest.TestCase):
         self.assertEqual(created["id"], changed["id"])
         self.assertEqual(changed["action"], "disagree")
         self.assertEqual(
-            self.database.feedback_for_device(DEMO_DEVICE_CODE, "comment-1"), changed
+            self.database.feedback_for_device(DEMO_DEVICE_CODE, self.device_token, "comment-1"), changed
         )
 
         with self.database._connection() as connection:
