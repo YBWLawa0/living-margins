@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import http.client
 import json
 import tempfile
@@ -362,6 +363,307 @@ class LiveVisionStateTests(unittest.TestCase):
 
         with patch("living_margins_web.HTTPConnection", return_value=connection):
             self.assertIsNone(living_margins_web.read_vision_state())
+
+
+class FirmwareOtaTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        temp = Path(self.temporary.name)
+        self.release_root = temp / "firmware"
+        self.release_root.mkdir()
+        self.release_manifest = self.release_root / "release.json"
+        self.release_root_patcher = patch.object(
+            living_margins_web, "FIRMWARE_RELEASE_ROOT", self.release_root
+        )
+        self.release_manifest_patcher = patch.object(
+            living_margins_web, "FIRMWARE_RELEASE_MANIFEST", self.release_manifest
+        )
+        self.release_root_patcher.start()
+        self.release_manifest_patcher.start()
+
+        database = WebDatabase(temp / "app.db")
+        self.device_token = database.rotate_device_token(DEMO_DEVICE_CODE)
+        owner = database.create_user("owner", "secret12")
+        database.bind_device(owner["id"], DEMO_DEVICE_CODE)
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(database))
+        self.server.daemon_threads = True
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def tearDown(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+        self.release_manifest_patcher.stop()
+        self.release_root_patcher.stop()
+        self.temporary.cleanup()
+
+    def _write_release(
+        self,
+        *,
+        version: str = "0.9.1",
+        payload: bytes = b"firmware-body",
+        manifest_version: str | None = None,
+        manifest_size: int | None = None,
+        manifest_sha256: str | None = None,
+        manifest_binary: str = "firmware.bin",
+        write_binary: bool = True,
+    ) -> dict[str, object]:
+        binary_path = self.release_root / "firmware.bin"
+        if write_binary:
+            binary_path.write_bytes(payload)
+        digest = hashlib.sha256(payload).hexdigest()
+        manifest = {
+            "version": manifest_version if manifest_version is not None else version,
+            "size": manifest_size if manifest_size is not None else len(payload),
+            "sha256": manifest_sha256 if manifest_sha256 is not None else digest,
+            "binary": manifest_binary,
+        }
+        self.release_manifest.write_text(
+            json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
+        )
+        return {"payload": payload, "sha256": digest, "manifest": manifest}
+
+    def _post(self, path: str, body: dict[str, object]) -> tuple[int, dict[str, object], dict[str, str]]:
+        connection = http.client.HTTPConnection(*self.server.server_address, timeout=3)
+        connection.request(
+            "POST",
+            path,
+            body=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        response = connection.getresponse()
+        raw = response.read()
+        headers = {key: value for key, value in response.getheaders()}
+        connection.close()
+        return response.status, json.loads(raw), headers
+
+    def _download(self, body: dict[str, object]) -> tuple[int, bytes, dict[str, str]]:
+        connection = http.client.HTTPConnection(*self.server.server_address, timeout=3)
+        connection.request(
+            "POST",
+            "/api/device/firmware/download",
+            body=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        response = connection.getresponse()
+        raw = response.read()
+        headers = {key: value for key, value in response.getheaders()}
+        connection.close()
+        return response.status, raw, headers
+
+    def test_check_offers_upgrade_when_release_is_newer(self) -> None:
+        release = self._write_release(version="0.9.1", payload=b"payload-091")
+        status, response, _ = self._post(
+            "/api/device/firmware/check",
+            {
+                "machine_code": DEMO_DEVICE_CODE,
+                "device_token": self.device_token,
+                "current_version": "0.9.0",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(response["available"])
+        self.assertEqual(response["release"]["version"], "0.9.1")
+        self.assertEqual(response["release"]["size"], len(release["payload"]))
+        self.assertEqual(response["release"]["sha256"], release["sha256"])
+        self.assertNotIn("path", response["release"])
+
+    def test_check_reports_no_update_when_versions_match(self) -> None:
+        self._write_release(version="0.9.1")
+        status, response, _ = self._post(
+            "/api/device/firmware/check",
+            {
+                "machine_code": DEMO_DEVICE_CODE,
+                "device_token": self.device_token,
+                "current_version": "0.9.1",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertFalse(response["available"])
+        self.assertIsNone(response["release"])
+
+    def test_check_does_not_offer_downgrade(self) -> None:
+        self._write_release(version="0.9.0", payload=b"older")
+        status, response, _ = self._post(
+            "/api/device/firmware/check",
+            {
+                "machine_code": DEMO_DEVICE_CODE,
+                "device_token": self.device_token,
+                "current_version": "0.9.1",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertFalse(response["available"])
+        self.assertIsNone(response["release"])
+
+    def test_check_rejects_invalid_device_token(self) -> None:
+        self._write_release(version="0.9.1")
+        status, response, _ = self._post(
+            "/api/device/firmware/check",
+            {
+                "machine_code": DEMO_DEVICE_CODE,
+                "device_token": "wrong",
+                "current_version": "0.9.0",
+            },
+        )
+        self.assertEqual(status, 401)
+        self.assertIn("令牌", response["error"])
+
+    def test_download_streams_binary_with_matching_headers(self) -> None:
+        release = self._write_release(version="0.9.1", payload=b"firmware-bytes-091")
+        status, raw, headers = self._download(
+            {
+                "machine_code": DEMO_DEVICE_CODE,
+                "device_token": self.device_token,
+                "current_version": "0.9.0",
+            }
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(raw, release["payload"])
+        self.assertEqual(headers["Content-Length"], str(len(release["payload"])))
+        self.assertEqual(headers["X-Firmware-Version"], "0.9.1")
+        self.assertEqual(headers["X-Firmware-SHA256"], release["sha256"])
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), release["sha256"])
+
+    def test_download_rejects_invalid_device_token(self) -> None:
+        self._write_release(version="0.9.1")
+        status, response, _ = self._post(
+            "/api/device/firmware/download",
+            {
+                "machine_code": DEMO_DEVICE_CODE,
+                "device_token": "wrong",
+                "current_version": "0.9.0",
+            },
+        )
+        self.assertEqual(status, 401)
+        self.assertIn("令牌", response["error"])
+
+    def test_download_returns_404_when_no_release_is_published(self) -> None:
+        status, response, _ = self._post(
+            "/api/device/firmware/download",
+            {
+                "machine_code": DEMO_DEVICE_CODE,
+                "device_token": self.device_token,
+                "current_version": "0.9.0",
+            },
+        )
+        self.assertEqual(status, 404)
+        self.assertIn("固件", response["error"])
+
+    def test_download_refuses_to_downgrade(self) -> None:
+        self._write_release(version="0.9.0", payload=b"older")
+        status, response, _ = self._post(
+            "/api/device/firmware/download",
+            {
+                "machine_code": DEMO_DEVICE_CODE,
+                "device_token": self.device_token,
+                "current_version": "0.9.1",
+            },
+        )
+        self.assertEqual(status, 409)
+        self.assertIn("最新", response["error"])
+
+    def test_download_rejects_manifest_with_hash_mismatch(self) -> None:
+        self._write_release(
+            version="0.9.1",
+            payload=b"real-bytes",
+            manifest_sha256="0" * 64,
+        )
+        status, response, _ = self._post(
+            "/api/device/firmware/download",
+            {
+                "machine_code": DEMO_DEVICE_CODE,
+                "device_token": self.device_token,
+                "current_version": "0.9.0",
+            },
+        )
+        self.assertEqual(status, 404)
+        self.assertIn("固件", response["error"])
+
+    def test_download_rejects_manifest_with_size_mismatch(self) -> None:
+        self._write_release(
+            version="0.9.1",
+            payload=b"twelve-bytes",
+            manifest_size=99,
+        )
+        status, response, _ = self._post(
+            "/api/device/firmware/download",
+            {
+                "machine_code": DEMO_DEVICE_CODE,
+                "device_token": self.device_token,
+                "current_version": "0.9.0",
+            },
+        )
+        self.assertEqual(status, 404)
+
+    def test_download_rejects_oversized_release(self) -> None:
+        self._write_release(
+            version="0.9.1",
+            payload=b"small",
+            manifest_size=living_margins_web.MAX_OTA_BINARY_SIZE + 1,
+        )
+        status, response, _ = self._post(
+            "/api/device/firmware/download",
+            {
+                "machine_code": DEMO_DEVICE_CODE,
+                "device_token": self.device_token,
+                "current_version": "0.9.0",
+            },
+        )
+        self.assertEqual(status, 404)
+
+    def test_download_rejects_missing_binary(self) -> None:
+        self._write_release(version="0.9.1", write_binary=False)
+        status, response, _ = self._post(
+            "/api/device/firmware/download",
+            {
+                "machine_code": DEMO_DEVICE_CODE,
+                "device_token": self.device_token,
+                "current_version": "0.9.0",
+            },
+        )
+        self.assertEqual(status, 404)
+
+    def test_download_rejects_manifest_with_path_escape(self) -> None:
+        self._write_release(version="0.9.1", manifest_binary="../escape.bin")
+        status, response, _ = self._post(
+            "/api/device/firmware/download",
+            {
+                "machine_code": DEMO_DEVICE_CODE,
+                "device_token": self.device_token,
+                "current_version": "0.9.0",
+            },
+        )
+        self.assertEqual(status, 404)
+
+    def test_check_reports_no_release_when_manifest_is_missing(self) -> None:
+        status, response, _ = self._post(
+            "/api/device/firmware/check",
+            {
+                "machine_code": DEMO_DEVICE_CODE,
+                "device_token": self.device_token,
+                "current_version": "0.9.0",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertFalse(response["available"])
+        self.assertIsNone(response["release"])
+
+    def test_check_rejects_invalid_current_version(self) -> None:
+        self._write_release(version="0.9.1")
+        status, response, _ = self._post(
+            "/api/device/firmware/check",
+            {
+                "machine_code": DEMO_DEVICE_CODE,
+                "device_token": self.device_token,
+                "current_version": "not-a-version",
+            },
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("版本", response["error"])
+
 
 
 if __name__ == "__main__":

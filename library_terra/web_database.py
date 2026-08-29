@@ -506,7 +506,7 @@ class WebDatabase:
         self, machine_code: str, device_token: str, connection_mode: str | None = None
     ) -> dict[str, Any]:
         """Authenticate a paired device and update its online heartbeat."""
-        if connection_mode not in {"realtime", "polling"}:
+        if connection_mode is not None and connection_mode not in {"realtime", "polling"}:
             raise ValueError("设备连接模式无效")
         now = time.time()
         with self._connection() as connection:
