@@ -1345,3 +1345,25 @@ textarea:disabled {
   .capture-actions { right: 10px; bottom: 34px; }
   .capture-result { bottom: 38px; }
 }
+
+/* V8.2 — edge-to-edge white canvas */
+html,
+body,
+.site-shell,
+.app-view,
+.app-page-content,
+.mobile-app-header,
+.compact-section,
+.compact-section .record-list { background: #ffffff; }
+
+@media (max-width: 760px) {
+  .app-page-content { width: 100%; max-width: none; margin: 0; padding: 0 0 80px; }
+  .data-hero { border-right: 0; border-left: 0; }
+  .reading-cta { border-right: 0; border-left: 0; }
+  .profile-card { border-right: 0; border-left: 0; }
+  .compact-section { width: 100%; }
+  .compact-section .section-header,
+  .compact-section .record-list { padding-right: 20px; padding-left: 20px; }
+  .compact-section .section-header { border-top-color: var(--black); }
+  .compact-section .record-list { border-bottom-color: var(--black); }
+}
