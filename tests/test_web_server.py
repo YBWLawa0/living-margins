@@ -298,6 +298,54 @@ class WebServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(reviewed["comment"]["status"], "rejected")
 
+    def test_authenticated_reader_can_feedback_on_current_comment(self) -> None:
+        status, _, _ = self.request(
+            "POST", "/api/auth/register", {"username": "web-reader", "password": "secret12"}
+        )
+        self.assertEqual(status, 200)
+        self.vision_mock.return_value = {
+            "revision": 13,
+            "book_id": "book-live",
+            "title": "实时书籍",
+            "pages": [40, 41],
+            "status": "stable",
+            "comment": {
+                "id": "comment-live-2",
+                "page": 40,
+                "text": "纸页上的另一种声音",
+                "author": "另一位读者",
+            },
+        }
+
+        status, created, _ = self.request(
+            "POST",
+            "/api/feedback",
+            {"comment_id": "comment-live-2", "action": "agree"},
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(created["feedback"]["action"], "agree")
+
+        status, changed, _ = self.request(
+            "POST",
+            "/api/feedback",
+            {"comment_id": "comment-live-2", "action": "disagree"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(changed["outcome"], "changed")
+
+        status, bootstrap, _ = self.request("GET", "/api/bootstrap")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(bootstrap["feedback"]), 1)
+        self.assertEqual(bootstrap["feedback"][0]["action"], "disagree")
+
+        status, rejected, _ = self.request(
+            "POST",
+            "/api/feedback",
+            {"comment_id": "another-comment", "action": "agree"},
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("当前书页", rejected["error"])
+
     def test_approved_comment_is_published_to_book_store(self) -> None:
         root = Path(self.temporary.name) / "books"
         book_dir = root / "book-live"

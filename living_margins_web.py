@@ -21,7 +21,7 @@ from library_terra.web_database import SESSION_TTL_SECONDS, WebDatabase
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-WEB_ROOT = PROJECT_ROOT / "web"
+WEB_ROOT = PROJECT_ROOT / "web" / "dist"
 RUNTIME_ROOT = Path(os.environ.get("LM_RUNTIME_ROOT", str(PROJECT_ROOT / "runtime")))
 BOOKS_ROOT = Path(os.environ.get("LM_BOOKS_ROOT", str(PROJECT_ROOT / "books")))
 MOBILE_FRAME_ROOT = Path(
@@ -580,6 +580,30 @@ def create_handler(database: WebDatabase):
                     submitted_body = str(body["body"]) if "body" in body else None
                     comment = database.submit_comment(user_id, comment_id, submitted_body)
                     self._send_json(HTTPStatus.OK, {"ok": True, "comment": comment})
+                    return
+                if route == "/api/feedback":
+                    vision = current_vision_state(user_id, database)
+                    comment = vision.get("comment") if isinstance(vision, dict) else None
+                    comment_id = str(body.get("comment_id", ""))
+                    if not isinstance(comment, dict) or str(comment.get("id", "")) != comment_id:
+                        raise ValueError("当前书页没有这条批注")
+                    raw_page = comment.get("page")
+                    page = int(raw_page) if raw_page is not None else None
+                    feedback, outcome = database.submit_user_feedback(
+                        user_id,
+                        comment_id,
+                        str(body.get("action", "")),
+                        book_id=str(vision.get("book_id") or "") or None,
+                        page=page,
+                    )
+                    self._send_json(
+                        HTTPStatus.CREATED if outcome == "created" else HTTPStatus.OK,
+                        {
+                            "ok": True,
+                            "feedback": feedback,
+                            "outcome": outcome,
+                        },
+                    )
                     return
                 if route == "/api/inspirations/mark":
                     vision = current_vision_state(user_id, database)

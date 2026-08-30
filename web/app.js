@@ -205,18 +205,111 @@ function renderDevices() {
   }
 }
 
+const recognitionLabels = {
+  waiting_camera: "等待相机",
+  searching_book: "正在识别书目",
+  searching_page: "正在寻找页码",
+  recognizing: "正在识别页码",
+  stable: "识别稳定",
+  turning: "检测到翻页",
+  frame_unstable: "画面需要调整",
+};
+
+function homeReadingSnapshot() {
+  const session = state.readingSession;
+  if (session?.status !== "paused") return state.vision;
+  return {
+    ...(state.vision || {}),
+    book_id: session.book_id || state.vision?.book_id,
+    title: session.book_title || state.vision?.title,
+    pages: session.pages || state.vision?.pages,
+    status: "paused",
+  };
+}
+
+function renderReadingSummary() {
+  const snapshot = homeReadingSnapshot();
+  const session = state.readingSession;
+  const pages = snapshot?.pages;
+  const pageText = pages?.length === 2 ? `${pages[0]} — ${pages[1]}` : "—";
+  const status = session?.status === "paused"
+    ? "阅读已暂停"
+    : snapshot
+      ? recognitionLabels[snapshot.status] || "正在观察书页"
+      : "尚未开始识别";
+  const detail = session?.status === "paused"
+    ? "当前书页已经冻结，可以继续取景或整理批注。"
+    : snapshot?.status === "stable"
+      ? "书目与页码均已确认。"
+      : snapshot
+        ? "保持书页完整、稳定地处于取景范围内。"
+        : "进入相机后，识别结果会同步到这里。";
+
+  $("#home-current-book").textContent = snapshot?.title || session?.book_title || "尚未识别书籍";
+  $("#home-vision-status").textContent = status;
+  $("#home-current-state").textContent = detail;
+  $("#home-current-pages").textContent = pageText;
+
+  const comment = snapshot?.comment;
+  $("#home-comment-body").textContent = comment?.text
+    || "识别到当前书页后，其他读者留下的批注会出现在这里。";
+  $("#home-comment-author").textContent = comment
+    ? `来自 ${comment.author || "匿名读者"}`
+    : "—";
+  $("#home-comment-page").textContent = comment
+    ? comment.page_end && comment.page_end !== comment.page
+      ? `P${comment.page}–P${comment.page_end}`
+      : `P${comment.page}`
+    : pages?.length === 2
+      ? `P${pages[0]}–P${pages[1]}`
+      : "等待页码";
+
+  const feedback = comment
+    ? state.feedback.find((item) => item.comment_id === String(comment.id))
+    : null;
+  const agreeButton = $("#home-feedback-agree");
+  const disagreeButton = $("#home-feedback-disagree");
+  [agreeButton, disagreeButton].forEach((button) => { button.disabled = !comment; });
+  agreeButton.classList.toggle("selected", feedback?.action === "agree");
+  disagreeButton.classList.toggle("selected", feedback?.action === "disagree");
+  agreeButton.setAttribute("aria-pressed", String(feedback?.action === "agree"));
+  disagreeButton.setAttribute("aria-pressed", String(feedback?.action === "disagree"));
+
+  const currentInspiration = Boolean(
+    snapshot?.book_id
+      && pages?.length === 2
+      && state.inspirations.some((item) =>
+        item.book_id === snapshot.book_id
+        && item.pages?.[0] === pages[0]
+        && item.pages?.[1] === pages[1]
+      )
+  );
+  const inspirationButton = $("#home-mark-inspiration");
+  const canMarkInspiration = Boolean(
+    state.capabilities.includes("inspirations")
+      && session?.status === "active"
+      && snapshot?.book_id
+      && pages?.length === 2
+  );
+  inspirationButton.disabled = !canMarkInspiration;
+  inspirationButton.classList.toggle("selected", currentInspiration);
+  inspirationButton.textContent = currentInspiration ? "已加入灵感集" : "加入灵感集";
+
+  const entry = $("#start-reading");
+  entry.querySelector("span").textContent = session ? "继续阅读" : "开始阅读";
+  entry.querySelector("strong").textContent = session ? "返回取景" : "进入取景";
+}
+
 function renderHome() {
   const username = state.user?.username || "读者";
   $("#username").textContent = username;
   $("#home-username").textContent = username;
   $("#profile-avatar").textContent = username.slice(0, 1).toUpperCase();
-  $("#data-comment-count").textContent = String(state.comments.length);
-  $("#data-inspiration-count").textContent = String(state.inspirations.length);
-  $("#data-device-count").textContent = String(state.devices.length);
+  renderReadingSummary();
   renderDevices();
-  $("#start-reading").querySelector("span").textContent = state.readingSession ? "继续本次阅读" : "开始一次阅读";
   renderComments();
   renderInspirations();
+  renderAgreedFeedback();
   renderReviewQueue();
 }
 
@@ -541,9 +634,16 @@ function startDevicePolling() {
   if (!state.capabilities.includes("device_presence")) return;
   const poll = async () => {
     try {
-      const body = await api("/api/devices");
+      const body = await api("/api/bootstrap");
+      state.capabilities = body.capabilities || [];
       state.devices = body.devices || [];
-      renderDevices();
+      state.comments = body.comments || [];
+      state.feedback = body.feedback || [];
+      state.inspirations = body.inspirations || [];
+      state.reviewQueue = body.review_queue || [];
+      state.readingSession = body.reading_session;
+      state.vision = body.vision;
+      renderHome();
     } catch (_) {}
   };
   poll();
@@ -713,8 +813,7 @@ $("#pause-reading").addEventListener("click", async () => {
   }
 });
 
-$("#mark-inspiration").addEventListener("click", async () => {
-  const button = $("#mark-inspiration");
+async function markCurrentInspiration(button) {
   button.disabled = true;
   try {
     const response = await api("/api/inspirations/mark", {
@@ -726,13 +825,43 @@ $("#mark-inspiration").addEventListener("click", async () => {
     );
     if (existingIndex === -1) state.inspirations.unshift(response.inspiration);
     else state.inspirations[existingIndex] = response.inspiration;
-    toast(response.created ? "已把当前书页放入灵感夹" : "这一页已经在灵感夹中");
+    toast(response.created ? "已加入灵感集" : "这一页已经在灵感集中");
   } catch (error) {
     toast(error.message);
   } finally {
     renderReading();
+    renderReadingSummary();
   }
-});
+}
+
+async function submitHomeFeedback(action) {
+  const comment = homeReadingSnapshot()?.comment;
+  if (!comment) return;
+  const buttons = [$("#home-feedback-agree"), $("#home-feedback-disagree")];
+  buttons.forEach((button) => { button.disabled = true; });
+  try {
+    const response = await api("/api/feedback", {
+      method: "POST",
+      body: JSON.stringify({ comment_id: comment.id, action }),
+    });
+    const index = state.feedback.findIndex(
+      (item) => item.comment_id === response.feedback.comment_id
+    );
+    if (index === -1) state.feedback.unshift(response.feedback);
+    else state.feedback[index] = response.feedback;
+    renderReadingSummary();
+    renderAgreedFeedback();
+    toast(action === "agree" ? "已赞同这条批注" : "已记录不赞同");
+  } catch (error) {
+    toast(error.message);
+    renderReadingSummary();
+  }
+}
+
+$("#mark-inspiration").addEventListener("click", () => markCurrentInspiration($("#mark-inspiration")));
+$("#home-mark-inspiration").addEventListener("click", () => markCurrentInspiration($("#home-mark-inspiration")));
+$("#home-feedback-agree").addEventListener("click", () => submitHomeFeedback("agree"));
+$("#home-feedback-disagree").addEventListener("click", () => submitHomeFeedback("disagree"));
 
 $("#annotation-text").addEventListener("input", (event) => {
   $("#annotation-counter").textContent = `${event.currentTarget.value.length} / 2000`;

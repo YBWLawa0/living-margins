@@ -401,7 +401,7 @@ class WebDatabase:
             rows = connection.execute(
                 """
                 SELECT * FROM comment_feedback
-                WHERE user_id = ? AND action = 'agree'
+                WHERE user_id = ?
                 ORDER BY updated_at DESC, id DESC
                 """,
                 (user_id,),
@@ -619,6 +619,72 @@ class WebDatabase:
                 "UPDATE devices SET last_seen_at = ? WHERE id = ?",
                 (now, device["id"]),
             )
+            updated = connection.execute(
+                "SELECT * FROM comment_feedback WHERE id = ?", (feedback_id,)
+            ).fetchone()
+        assert updated is not None
+        return self._public_feedback(updated), outcome
+
+    def submit_user_feedback(
+        self,
+        user_id: int,
+        comment_id: str,
+        action: str,
+        *,
+        book_id: str | None = None,
+        page: int | None = None,
+    ) -> tuple[dict[str, Any], str]:
+        target_comment_id = comment_id.strip()
+        if not target_comment_id or len(target_comment_id) > 128:
+            raise ValueError("批注编号无效")
+        if action not in {"agree", "disagree"}:
+            raise ValueError("反馈只能是赞同或不赞同")
+        safe_page = None if page is None else int(page)
+        if safe_page is not None and safe_page <= 0:
+            raise ValueError("反馈页码无效")
+        now = time.time()
+        with self._connection() as connection:
+            existing = connection.execute(
+                """
+                SELECT * FROM comment_feedback
+                WHERE user_id = ? AND comment_id = ?
+                """,
+                (user_id, target_comment_id),
+            ).fetchone()
+            if existing is None:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO comment_feedback(
+                        user_id, device_id, comment_id, book_id, page,
+                        action, created_at, updated_at
+                    ) VALUES (?, NULL, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        user_id,
+                        target_comment_id,
+                        book_id,
+                        safe_page,
+                        action,
+                        now,
+                        now,
+                    ),
+                )
+                outcome = "created"
+                feedback_id = cursor.lastrowid
+            elif existing["action"] == action:
+                outcome = "unchanged"
+                feedback_id = existing["id"]
+            else:
+                connection.execute(
+                    """
+                    UPDATE comment_feedback
+                    SET book_id = ?, page = ?, action = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (book_id, safe_page, action, now, existing["id"]),
+                )
+                outcome = "changed"
+                feedback_id = existing["id"]
             updated = connection.execute(
                 "SELECT * FROM comment_feedback WHERE id = ?", (feedback_id,)
             ).fetchone()

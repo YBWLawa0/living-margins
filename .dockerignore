@@ -3,6 +3,8 @@
 __pycache__
 debug
 runtime
+web/node_modules
+web/dist
 firmware/.pio
 firmware/include/device_secrets.h
 *.log
