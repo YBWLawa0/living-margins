@@ -336,9 +336,6 @@ class WebDatabase:
             ).fetchone()
             if row is None:
                 raise ValueError("没有找到这台屏幕，请检查机器码")
-            owner = row["paired_user_id"]
-            if owner is not None and int(owner) != user_id:
-                raise ValueError("这台屏幕已经被其他用户绑定")
             connection.execute(
                 "UPDATE devices SET paired_user_id = ?, last_seen_at = ? WHERE id = ?",
                 (user_id, time.time(), row["id"]),
@@ -459,9 +456,6 @@ class WebDatabase:
                 raise ValueError("配对链接已失效，请在屏幕上重新生成")
             if pairing["claimed_at"] is not None:
                 raise ValueError("配对链接已经使用")
-            owner = pairing["paired_user_id"]
-            if owner is not None and int(owner) != user_id:
-                raise ValueError("这台屏幕已经被其他用户绑定")
             connection.execute(
                 "UPDATE devices SET paired_user_id = ?, last_seen_at = ? WHERE id = ?",
                 (user_id, now, pairing["device_id"]),

@@ -8,13 +8,14 @@ import os
 import mimetypes
 import re
 import time
+from datetime import datetime
 from http import HTTPStatus
 from http.client import HTTPConnection, HTTPException
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from library_terra.comments import CommentStore
 from library_terra.web_database import SESSION_TTL_SECONDS, WebDatabase
@@ -28,7 +29,7 @@ MOBILE_FRAME_ROOT = Path(
     os.environ.get("LM_MOBILE_FRAME_ROOT", str(RUNTIME_ROOT / "mobile_frames"))
 )
 COOKIE_NAME = "living_margins_session"
-WEB_API_VERSION = 12
+WEB_API_VERSION = 13
 WEB_CAPABILITIES = [
     "inspirations",
     "comment_review",
@@ -42,7 +43,52 @@ WEB_CAPABILITIES = [
     "mobile_camera_ingest",
     "session_state_isolation",
     "feedback_history",
+    "admin_book_enrollment",
 ]
+
+
+def save_uploaded_book(title: str, cover: bytes, books_root: Path | None = None) -> dict[str, Any]:
+    clean_title = re.sub(r"\s+", " ", title).strip()
+    if not clean_title or len(clean_title) > 160:
+        raise ValueError("请填写 1–160 个字符的书名")
+    if len(cover) < 512 or not cover.startswith(b"\xff\xd8") or not cover.endswith(b"\xff\xd9"):
+        raise ValueError("封面必须是有效的 JPEG 图片")
+    books_root = books_root or BOOKS_ROOT
+    stamp = datetime.now().astimezone()
+    ascii_title = clean_title.encode("ascii", "ignore").decode("ascii").lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", ascii_title).strip("-")[:42]
+    base_id = f"{slug}-{stamp:%H%M%S}" if slug else f"book-{stamp:%Y%m%d-%H%M%S}"
+    book_id = base_id
+    suffix = 2
+    while (books_root / book_id / "book.json").exists():
+        book_id = f"{base_id}-{suffix}"
+        suffix += 1
+    book_dir = books_root / book_id
+    book_dir.mkdir(parents=True, exist_ok=False)
+    try:
+        cover_path = book_dir / "cover.jpg"
+        temporary_cover = book_dir / "cover.tmp"
+        temporary_cover.write_bytes(cover)
+        temporary_cover.replace(cover_path)
+        metadata = {
+            "id": book_id,
+            "title": clean_title,
+            "cover": "cover.jpg",
+            "reviewed": True,
+            "source": "mobile-web-upload",
+            "created_at": stamp.isoformat(timespec="seconds"),
+            "cover_sha256": hashlib.sha256(cover).hexdigest(),
+            "ocr_lines": [],
+        }
+        temporary_metadata = book_dir / "book.tmp"
+        temporary_metadata.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary_metadata.replace(book_dir / "book.json")
+        return metadata
+    except Exception:
+        for child in book_dir.iterdir():
+            child.unlink(missing_ok=True)
+        book_dir.rmdir()
+        raise
 
 
 def _vision_state_port() -> int:
@@ -387,6 +433,36 @@ def create_handler(database: WebDatabase):
                     HTTPStatus.ACCEPTED,
                     {"ok": True, "bytes": length, "uploaded_at": time.time()},
                 )
+                return
+
+            if route == "/api/admin/books":
+                user = self._require_user()
+                if user is None:
+                    return
+                if user.get("role") != "admin":
+                    self._send_error_json(HTTPStatus.FORBIDDEN, "仅管理员可以录入图书")
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                except ValueError:
+                    length = 0
+                if (
+                    not self.headers.get("Content-Type", "").startswith("image/jpeg")
+                    or length <= 0
+                    or length > 5_000_000
+                ):
+                    self._send_error_json(HTTPStatus.BAD_REQUEST, "封面必须是 5MB 以内的 JPEG 图片")
+                    return
+                title = unquote(self.headers.get("X-Book-Title", ""))
+                payload = self.rfile.read(length)
+                if len(payload) != length:
+                    self._send_error_json(HTTPStatus.BAD_REQUEST, "封面上传不完整")
+                    return
+                try:
+                    book = save_uploaded_book(title, payload)
+                    self._send_json(HTTPStatus.CREATED, {"ok": True, "book": book})
+                except (OSError, ValueError) as exc:
+                    self._send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
                 return
 
             try:

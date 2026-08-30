@@ -307,10 +307,25 @@ def main() -> int:
     state_root.mkdir(parents=True, exist_ok=True)
     comments = CommentStore(books_root)
     cover_matcher = CoverMatcher(books_root, cfg)
+    library_revision = tuple(
+        (str(path), path.stat().st_mtime_ns, path.stat().st_size)
+        for path in sorted(books_root.glob("*/book.json"))
+    )
+    last_library_scan = time.monotonic()
     engine = RapidOCR()
     channels: dict[tuple[int, int], VisionChannel] = {}
 
     while True:
+        if time.monotonic() - last_library_scan >= 2.0:
+            next_revision = tuple(
+                (str(path), path.stat().st_mtime_ns, path.stat().st_size)
+                for path in sorted(books_root.glob("*/book.json"))
+            )
+            if next_revision != library_revision:
+                cover_matcher.reload()
+                library_revision = next_revision
+                print(f"Reloaded book library: {len(cover_matcher.entries)} covers")
+            last_library_scan = time.monotonic()
         frames = newest_frames(frames_root)
         for key, frame_path in frames.items():
             channel = channels.get(key)

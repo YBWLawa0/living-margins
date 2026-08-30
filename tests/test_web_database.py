@@ -38,16 +38,19 @@ class WebDatabaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "已经存在"):
             self.database.create_user("papermoon", "another-secret")
 
-    def test_device_binding_persists_and_is_exclusive(self) -> None:
+    def test_device_can_be_rebound_by_another_user(self) -> None:
         first = self.database.create_user("first", "secret12")
         second = self.database.create_user("second", "secret12")
         device = self.database.bind_device(first["id"], DEMO_DEVICE_CODE.lower())
 
         self.assertEqual(self.database.devices_for_user(first["id"]), [device])
-        with self.assertRaisesRegex(ValueError, "其他用户"):
-            self.database.bind_device(second["id"], DEMO_DEVICE_CODE)
+        rebound = self.database.bind_device(second["id"], DEMO_DEVICE_CODE)
+        self.assertEqual(rebound["id"], device["id"])
+        self.assertEqual(rebound["machine_code"], device["machine_code"])
+        self.assertEqual(self.database.devices_for_user(first["id"]), [])
+        self.assertEqual(self.database.devices_for_user(second["id"]), [rebound])
 
-    def test_pairing_token_is_short_lived_single_use_and_owner_safe(self) -> None:
+    def test_pairing_token_is_short_lived_single_use_and_allows_rebinding(self) -> None:
         owner = self.database.create_user("owner", "secret12")
         other = self.database.create_user("other", "secret12")
         pairing = self.database.start_device_pairing(
@@ -59,8 +62,9 @@ class WebDatabaseTests(unittest.TestCase):
             self.database.claim_device_pairing(owner["id"], pairing["pairing_token"])
 
         second = self.database.start_device_pairing(DEMO_DEVICE_CODE, self.device_token)
-        with self.assertRaisesRegex(ValueError, "其他用户"):
-            self.database.claim_device_pairing(other["id"], second["pairing_token"])
+        rebound = self.database.claim_device_pairing(other["id"], second["pairing_token"])
+        self.assertEqual(self.database.devices_for_user(owner["id"]), [])
+        self.assertEqual(self.database.devices_for_user(other["id"]), [rebound])
         with self.assertRaisesRegex(PermissionError, "令牌无效"):
             self.database.start_device_pairing(DEMO_DEVICE_CODE, "wrong-token")
     def test_device_feedback_is_unique_per_user_and_supports_vote_change(self) -> None:

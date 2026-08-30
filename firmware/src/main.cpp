@@ -48,6 +48,8 @@ lv_obj_t *agree_button;
 lv_obj_t *disagree_button;
 lv_obj_t *agree_text;
 lv_obj_t *disagree_text;
+lv_obj_t *pair_entry_button = nullptr;
+lv_obj_t *pair_entry_text = nullptr;
 unsigned long last_wifi_attempt;
 unsigned long last_poll;
 String current_comment_id;
@@ -104,7 +106,7 @@ void set_button_state(bool enabled) {
 void on_feedback(lv_event_t *event) {
     if (lv_event_get_code(event) != LV_EVENT_CLICKED || current_comment_id.isEmpty()) return;
     pending_feedback = static_cast<const char *>(lv_event_get_user_data(event));
-    lv_label_set_text(connection_label, "SENDING");
+    lv_label_set_text(connection_label, "正在发送");
     set_button_state(false);
 }
 
@@ -117,14 +119,25 @@ void close_pairing_overlay(lv_event_t *event) {
 void on_pairing_request(lv_event_t *event) {
     if (lv_event_get_code(event) != LV_EVENT_LONG_PRESSED) return;
     pending_pairing_request = true;
-    lv_label_set_text(connection_label, "PAIRING");
+    lv_label_set_text(connection_label, "正在配对");
+}
+
+void on_pair_entry(lv_event_t *event) {
+    if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+    if (WiFi.status() == WL_CONNECTED) {
+        pending_pairing_request = true;
+        lv_label_set_text(connection_label, "正在配对");
+    } else {
+        pending_wifi_setup = true;
+        lv_label_set_text(connection_label, "网络设置");
+    }
 }
 void show_wifi_password_screen();
 
 void on_update_request(lv_event_t *event) {
     if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
     pending_update_check = true;
-    lv_label_set_text(connection_label, "CHECKING UPDATE");
+    lv_label_set_text(connection_label, "检查更新");
 }
 
 void on_update_install(lv_event_t *event) {
@@ -147,7 +160,7 @@ void on_update_close(lv_event_t *event) {
 void on_config_request(lv_event_t *event) {
     if (lv_event_get_code(event) != LV_EVENT_LONG_PRESSED) return;
     pending_wifi_setup = true;
-    lv_label_set_text(connection_label, "NETWORK SETUP");
+    lv_label_set_text(connection_label, "网络设置");
 }
 void on_wifi_network_selected(lv_event_t *event) {
     if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
@@ -221,14 +234,32 @@ void create_live_ui() {
     lv_obj_add_event_cb(brand_label, on_config_request, LV_EVENT_LONG_PRESSED, nullptr);
 
     connection_label = lv_label_create(screen);
-    lv_label_set_text(connection_label, "STARTING");
-    lv_obj_set_style_text_font(connection_label, &lv_font_montserrat_14, 0);
+    lv_label_set_text(connection_label, "启动中");
+    lv_obj_set_style_text_font(connection_label, &lm_font_cjk_16, 0);
     lv_obj_set_style_text_color(connection_label, kMuted, 0);
     lv_obj_align(connection_label, LV_ALIGN_TOP_RIGHT, -34, 26);
     lv_obj_add_flag(connection_label, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_ext_click_area(connection_label, 20);
     lv_obj_add_event_cb(connection_label, on_pairing_request, LV_EVENT_LONG_PRESSED, nullptr);
     lv_obj_add_event_cb(connection_label, on_update_request, LV_EVENT_CLICKED, nullptr);
+
+    pair_entry_button = lv_btn_create(screen);
+    lv_obj_set_size(pair_entry_button, 190, 142);
+    lv_obj_set_pos(pair_entry_button, 576, 82);
+    lv_obj_set_style_radius(pair_entry_button, 0, 0);
+    lv_obj_set_style_bg_color(pair_entry_button, kPaper, 0);
+    lv_obj_set_style_border_color(pair_entry_button, kInk, 0);
+    lv_obj_set_style_border_width(pair_entry_button, 2, 0);
+    lv_obj_set_style_shadow_width(pair_entry_button, 0, 0);
+    lv_obj_add_event_cb(pair_entry_button, on_pair_entry, LV_EVENT_CLICKED, nullptr);
+    pair_entry_text = lv_label_create(pair_entry_button);
+    lv_label_set_text(pair_entry_text, "Wi-Fi 暂未连接\n请先连接 Wi-Fi");
+    lv_label_set_long_mode(pair_entry_text, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(pair_entry_text, 166);
+    lv_obj_set_style_text_align(pair_entry_text, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(pair_entry_text, &lm_font_cjk_16, 0);
+    lv_obj_set_style_text_color(pair_entry_text, kInk, 0);
+    lv_obj_center(pair_entry_text);
 
     lv_obj_t *rule = lv_obj_create(screen);
     lv_obj_remove_style_all(rule);
@@ -253,7 +284,7 @@ void create_live_ui() {
 
     message_label = lv_label_create(screen);
     lv_label_set_text(message_label, "正在准备网络连接……");
-    lv_obj_set_width(message_label, 720);
+    lv_obj_set_width(message_label, 520);
     lv_label_set_long_mode(message_label, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(message_label, &lm_font_cjk_16, 0);
     lv_obj_set_style_text_color(message_label, kInk, 0);
@@ -288,11 +319,45 @@ void show_network_message(const char *status, lv_color_t color, const char *mess
     lvgl_port_unlock();
 }
 
-void load_network_settings() {
-    preferences.begin("living-margins", true);
-    wifi_ssid = preferences.getString("wifi_ssid", LM_WIFI_SSID);
-    wifi_password = preferences.getString("wifi_pass", LM_WIFI_PASSWORD);
+void show_pair_entry(const char *text, bool visible = true) {
+    if (pair_entry_button == nullptr || pair_entry_text == nullptr) return;
+    lvgl_port_lock(-1);
+    lv_label_set_text(pair_entry_text, text);
+    if (visible) {
+        lv_obj_clear_flag(pair_entry_button, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_width(message_label, 520);
+    } else {
+        lv_obj_add_flag(pair_entry_button, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_width(message_label, 720);
+    }
+    lvgl_port_unlock();
+}
+
+bool save_network_settings() {
+    if (!preferences.begin("lm-network", false)) return false;
+    const size_t ssid_written = preferences.putString("ssid", wifi_ssid);
+    const size_t password_written = preferences.putString("password", wifi_password);
     preferences.end();
+    return ssid_written == wifi_ssid.length() &&
+           (wifi_password.isEmpty() || password_written == wifi_password.length());
+}
+
+void load_network_settings() {
+    if (preferences.begin("lm-network", true)) {
+        wifi_ssid = preferences.getString("ssid", "");
+        wifi_password = preferences.getString("password", "");
+        preferences.end();
+    }
+    if (wifi_ssid.isEmpty() && preferences.begin("living-margins", true)) {
+        wifi_ssid = preferences.getString("wifi_ssid", LM_WIFI_SSID);
+        wifi_password = preferences.getString("wifi_pass", LM_WIFI_PASSWORD);
+        preferences.end();
+        if (!wifi_ssid.isEmpty()) save_network_settings();
+    }
+    if (wifi_ssid.isEmpty()) {
+        wifi_ssid = LM_WIFI_SSID;
+        wifi_password = LM_WIFI_PASSWORD;
+    }
     web_url = LM_WEB_URL;
 }
 lv_obj_t *create_wifi_overlay(const char *title) {
@@ -420,19 +485,19 @@ void finish_update_failure(HTTPClient &http, const char *message) {
     Update.abort();
     http.end();
     if (realtime_state_task_handle != nullptr) vTaskResume(realtime_state_task_handle);
-    show_network_message("UPDATE FAILED", kBad, message);
+    show_network_message("更新失败", kBad, message);
 }
 
 void install_firmware_update() {
     if (available_firmware_version.isEmpty() ||
         available_firmware_sha256.length() != 64 ||
         available_firmware_size == 0) {
-        show_network_message("UPDATE FAILED", kBad, "没有可安装的固件");
+        show_network_message("更新失败", kBad, "没有可安装的固件");
         return;
     }
 
     if (realtime_state_task_handle != nullptr) vTaskSuspend(realtime_state_task_handle);
-    show_network_message("UPDATING", kMuted, "正在下载并校验固件，请勿断电……");
+    show_network_message("正在更新", kMuted, "正在下载并校验固件，请勿断电……");
 
     HTTPClient http;
     http.setConnectTimeout(3000);
@@ -442,7 +507,7 @@ void install_firmware_update() {
     String endpoint = web_url + "/api/device/firmware/download";
     if (!http.begin(endpoint)) {
         if (realtime_state_task_handle != nullptr) vTaskResume(realtime_state_task_handle);
-        show_network_message("UPDATE FAILED", kBad, "无法连接更新服务器");
+        show_network_message("更新失败", kBad, "无法连接更新服务器");
         return;
     }
     http.addHeader("Content-Type", "application/json");
@@ -497,7 +562,7 @@ void install_firmware_update() {
     }
     http.end();
 
-    show_network_message("UPDATE READY", kGood, "更新成功，正在重新启动……");
+    show_network_message("更新完成", kGood, "更新成功，正在重新启动……");
     delay(1200);
     ESP.restart();
 }
@@ -572,7 +637,7 @@ void start_wifi_setup(const char *notice = "选择要连接的 Wi-Fi") {
     testing_wifi = false;
     WiFi.disconnect(false);
     WiFi.mode(WIFI_STA);
-    set_connection("SCANNING WI-FI", kMuted);
+    set_connection("扫描 Wi-Fi", kMuted);
     int count = WiFi.scanNetworks(false, true);
     scanned_wifi_ssids.clear();
     for (int index = 0; index < count; ++index) {
@@ -593,15 +658,31 @@ void start_wifi_setup(const char *notice = "选择要连接的 Wi-Fi") {
 
 void begin_wifi() {
     if (wifi_ssid.isEmpty()) {
-        pending_wifi_setup = true;
+        show_network_message("Wi-Fi 未连接", kMuted, "Wi-Fi 暂未连接，请先连接 Wi-Fi");
+        show_pair_entry("Wi-Fi 暂未连接\n请先连接 Wi-Fi");
         return;
     }
     WiFi.mode(WIFI_STA);
     WiFi.begin(wifi_ssid.c_str(), wifi_password.c_str());
     last_wifi_attempt = millis();
     if (wifi_connect_started == 0) wifi_connect_started = last_wifi_attempt;
-    show_network_message("WI-FI CONNECTING", kMuted, "正在连接 Wi-Fi……");
+    show_network_message("Wi-Fi 连接中", kMuted, "正在连接已保存的 Wi-Fi……");
+    show_pair_entry("Wi-Fi 暂未连接\n请先连接 Wi-Fi");
 }
+
+const char *localized_state(const char *status) {
+    if (strcmp(status, "waiting_camera") == 0) return "等待手机相机";
+    if (strcmp(status, "searching_book") == 0) return "正在识别书籍";
+    if (strcmp(status, "searching_page") == 0) return "正在寻找页码";
+    if (strcmp(status, "recognizing") == 0) return "正在识别页码";
+    if (strcmp(status, "stable") == 0) return "识别稳定";
+    if (strcmp(status, "turning") == 0) return "检测到翻页";
+    if (strcmp(status, "frame_unstable") == 0) return "请调整拍摄画面";
+    if (strcmp(status, "paused") == 0) return "阅读已暂停";
+    if (strcmp(status, "waiting") == 0) return "等待阅读状态";
+    return "正在同步阅读状态";
+}
+
 void show_state(JsonDocument &doc) {
     realtime_revision = doc["revision"] | -1;
     const char *title = doc["title"] | "等待识别书籍";
@@ -622,7 +703,7 @@ void show_state(JsonDocument &doc) {
     const bool feedback_ready = !current_comment_id.isEmpty();
 
     lvgl_port_lock(-1);
-    lv_label_set_text(connection_label, "LIVE");
+    lv_label_set_text(connection_label, "云端在线");
     lv_obj_set_style_text_color(connection_label, kGood, 0);
     lv_label_set_text(title_label, title);
     lv_label_set_text(page_label, page);
@@ -637,9 +718,18 @@ void show_state(JsonDocument &doc) {
         lv_label_set_text(author_label, "");
     } else {
         String state = "阅读状态：";
-        state += status;
+        state += localized_state(status);
         lv_label_set_text(message_label, state.c_str());
         lv_label_set_text(author_label, "");
+    }
+    const bool show_pairing = strcmp(status, "waiting_camera") == 0;
+    if (show_pairing) {
+        lv_label_set_text(pair_entry_text, "扫码绑定\n页边屏幕");
+        lv_obj_clear_flag(pair_entry_button, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_width(message_label, 520);
+    } else {
+        lv_obj_add_flag(pair_entry_button, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_width(message_label, 720);
     }
     lv_label_set_text(agree_text, current_feedback == "agree" ? "已赞同" : "赞同");
     lv_label_set_text(disagree_text, current_feedback == "disagree" ? "已不赞同" : "不赞同");
@@ -662,21 +752,22 @@ void poll_state() {
     int code = http.POST(body);
     if (code != HTTP_CODE_OK) {
         http.end();
-        show_network_message("CLOUD OFFLINE", kBad, "云端状态接口暂时不可用");
+        show_network_message("云端离线", kBad, "云端状态接口暂时不可用");
         return;
     }
     JsonDocument doc;
     DeserializationError error = deserializeJson(doc, http.getStream());
     http.end();
     if (error) {
-        show_network_message("DATA ERROR", kBad, "状态数据解析失败");
+        show_network_message("数据错误", kBad, "状态数据解析失败");
         return;
     }
     if (doc["vision"].is<JsonObject>()) {
         JsonDocument vision(doc["vision"]);
         show_state(vision);
     } else {
-        show_network_message("WAITING", kMuted, "等待识别服务发布阅读状态");
+        show_network_message("等待中", kMuted, "等待手机相机开始传送画面");
+        show_pair_entry("扫码绑定\n页边屏幕");
     }
 }
 
@@ -742,7 +833,7 @@ void request_pairing_qr() {
 
     lvgl_port_lock(-1);
     if (!valid) {
-        lv_label_set_text(connection_label, "PAIRING ERROR");
+        lv_label_set_text(connection_label, "配对失败");
         lv_obj_set_style_text_color(connection_label, kBad, 0);
         lvgl_port_unlock();
         return;
@@ -822,12 +913,12 @@ void submit_feedback(const String &action) {
     lvgl_port_lock(-1);
     if (code == HTTP_CODE_OK || code == HTTP_CODE_CREATED) {
         current_feedback = action;
-        lv_label_set_text(connection_label, "FEEDBACK SAVED");
+        lv_label_set_text(connection_label, "反馈已保存");
         lv_obj_set_style_text_color(connection_label, kGood, 0);
         lv_label_set_text(agree_text, action == "agree" ? "已赞同" : "赞同");
         lv_label_set_text(disagree_text, action == "disagree" ? "已不赞同" : "不赞同");
     } else {
-        lv_label_set_text(connection_label, "FEEDBACK ERROR");
+        lv_label_set_text(connection_label, "反馈失败");
         lv_obj_set_style_text_color(connection_label, kBad, 0);
     }
     set_button_state(true);
@@ -892,30 +983,24 @@ void loop() {
         WiFi.mode(WIFI_STA);
         WiFi.begin(selected_wifi_ssid.c_str(), entered_wifi_password.c_str());
         wifi_connect_started = now;
-        show_network_message("TESTING WI-FI", kMuted, "正在验证网络密码……");
+        show_network_message("验证 Wi-Fi", kMuted, "正在验证网络密码……");
+        show_pair_entry("Wi-Fi 暂未连接\n请先连接 Wi-Fi");
         return;
     }
     if (testing_wifi) {
         if (WiFi.status() == WL_CONNECTED) {
             wifi_ssid = selected_wifi_ssid;
             wifi_password = entered_wifi_password;
-            preferences.begin("living-margins", false);
-            preferences.putString("wifi_ssid", wifi_ssid);
-            preferences.putString("wifi_pass", wifi_password);
-            preferences.end();
+            const bool saved = save_network_settings();
             testing_wifi = false;
             wifi_setup_active = false;
             wifi_connect_started = 0;
-    if (pending_update_install) {
-        pending_update_install = false;
-        install_firmware_update();
-        return;
-    }
-    if (pending_update_check) {
-        pending_update_check = false;
-        check_firmware_update();
-        return;
-    }            show_network_message("WI-FI SAVED", kGood, "网络已连接并保存");
+            show_network_message(
+                saved ? "Wi-Fi 已保存" : "保存失败",
+                saved ? kGood : kBad,
+                saved ? "网络已连接，密码将在重启后自动使用" : "网络已连接，但凭据写入失败"
+            );
+            show_pair_entry("扫码绑定\n页边屏幕");
         } else if (now - wifi_connect_started >= 20000) {
             testing_wifi = false;
             start_wifi_setup("连接失败，请检查密码后重试");
@@ -937,6 +1022,16 @@ void loop() {
         return;
     }
     wifi_connect_started = 0;
+    if (pending_update_install) {
+        pending_update_install = false;
+        install_firmware_update();
+        return;
+    }
+    if (pending_update_check) {
+        pending_update_check = false;
+        check_firmware_update();
+        return;
+    }
     if (realtime_state_queue != nullptr &&
         xQueueReceive(realtime_state_queue, &incoming_state_message, 0) == pdTRUE) {
         JsonDocument realtime_doc;

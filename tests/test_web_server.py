@@ -9,6 +9,7 @@ import unittest
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import Mock, patch
+from urllib.parse import quote
 
 import living_margins_web
 from library_terra.web_database import DEMO_DEVICE_CODE, WebDatabase
@@ -55,6 +56,59 @@ class WebServerTests(unittest.TestCase):
         if "Set-Cookie" in response_headers:
             self.cookie = response_headers["Set-Cookie"].split(";", 1)[0]
         return response.status, json.loads(raw), response_headers
+
+    def request_bytes(
+        self, path: str, payload: bytes, headers: dict[str, str]
+    ) -> tuple[int, dict[str, object]]:
+        connection = http.client.HTTPConnection(*self.server.server_address, timeout=3)
+        request_headers = dict(headers)
+        if self.cookie:
+            request_headers["Cookie"] = self.cookie
+        connection.request("POST", path, body=payload, headers=request_headers)
+        response = connection.getresponse()
+        body = json.loads(response.read())
+        connection.close()
+        return response.status, body
+
+    def test_admin_can_upload_reviewed_book_cover(self) -> None:
+        status, registered, _ = self.request(
+            "POST", "/api/auth/register", {"username": "librarian", "password": "secret12"}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(registered["user"]["role"], "admin")
+        jpeg = b"\xff\xd8" + b"cover-data" * 80 + b"\xff\xd9"
+        books_root = Path(self.temporary.name) / "uploaded-books"
+        with patch("living_margins_web.BOOKS_ROOT", books_root):
+            status, uploaded = self.request_bytes(
+                "/api/admin/books",
+                jpeg,
+                {
+                    "Content-Type": "image/jpeg",
+                    "Content-Length": str(len(jpeg)),
+                    "X-Book-Title": quote("测试图书"),
+                },
+            )
+        self.assertEqual(status, 201)
+        book = uploaded["book"]
+        metadata_path = books_root / book["id"] / "book.json"
+        self.assertTrue(metadata_path.is_file())
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        self.assertEqual(metadata["title"], "测试图书")
+        self.assertEqual(metadata["source"], "mobile-web-upload")
+        self.assertEqual((metadata_path.parent / "cover.jpg").read_bytes(), jpeg)
+
+        self.request("POST", "/api/auth/logout", {})
+        status, reader, _ = self.request(
+            "POST", "/api/auth/register", {"username": "ordinary", "password": "secret12"}
+        )
+        self.assertEqual(reader["user"]["role"], "reader")
+        status, rejected = self.request_bytes(
+            "/api/admin/books",
+            jpeg,
+            {"Content-Type": "image/jpeg", "X-Book-Title": quote("无权图书")},
+        )
+        self.assertEqual(status, 403)
+        self.assertIn("管理员", rejected["error"])
 
     def test_qr_pairing_contract(self) -> None:
         status, pairing, _ = self.request(

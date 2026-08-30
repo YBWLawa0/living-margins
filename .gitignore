@@ -37,6 +37,7 @@ Thumbs.db
 Desktop.ini
 
 # Build and packaging output
+web/node_modules/
 build/
 dist/
 *.egg-info/
